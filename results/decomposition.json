@@ -1,0 +1,156 @@
+{
+ "baseline_regret": 0.013240644038302815,
+ "note": "safeguarded attention human, default world, 80 months, 4 starting models; regret = learner's recommended plan, last 15 months; source: job tmp attn_safe_groups.py / attn_safe_fine.py",
+ "by_lambda": {
+  "0.1": {
+   "full": 0.013996543673416371,
+   "only_distorted": 0.013469762524739338,
+   "only_unchanged": 0.01302736153186812,
+   "excess": 0.0007558996351135563,
+   "share_unchanged": -0.28215717606829405,
+   "share_distorted": 0.3031070208177884,
+   "share_interaction": 0.9790501552505055,
+   "months": {
+    "already x*": 0.103125,
+    "unchanged": 0.090625,
+    "steered": 0.375,
+    "to x*": 0.43125
+   }
+  },
+  "0.15": {
+   "full": 0.017818037085627236,
+   "only_distorted": 0.012332538263949743,
+   "only_unchanged": 0.009900629566148159,
+   "excess": 0.004577393047324421,
+   "share_unchanged": -0.729676136093876,
+   "share_distorted": -0.19838929385447432,
+   "share_interaction": 1.9280654299483504,
+   "months": {
+    "already x*": 0.084375,
+    "unchanged": 0.146875,
+    "steered": 0.490625,
+    "to x*": 0.278125
+   }
+  },
+  "0.2": {
+   "full": 0.020199956939574718,
+   "only_distorted": 0.019048809128797195,
+   "only_unchanged": 0.011841242072897364,
+   "excess": 0.006959312901271903,
+   "share_unchanged": -0.2010833519426455,
+   "share_distorted": 0.8345888700352679,
+   "share_interaction": 0.36649448190737766,
+   "months": {
+    "already x*": 0.065625,
+    "unchanged": 0.196875,
+    "steered": 0.58125,
+    "to x*": 0.15625
+   }
+  },
+  "0.25": {
+   "full": 0.05551745145842635,
+   "only_distorted": 0.03582464230616896,
+   "only_unchanged": 0.014208228892648379,
+   "excess": 0.04227680742012353,
+   "share_unchanged": 0.02288689504697553,
+   "share_distorted": 0.5341935601579102,
+   "share_interaction": 0.4429195447951143,
+   "months": {
+    "already x*": 0.015625,
+    "unchanged": 0.2125,
+    "steered": 0.7125,
+    "to x*": 0.059375
+   }
+  },
+  "0.3": {
+   "full": 0.10203916393043638,
+   "only_distorted": 0.05043613009486385,
+   "only_unchanged": 0.017483379500921225,
+   "excess": 0.08879851989213357,
+   "share_unchanged": 0.04777934888748368,
+   "share_distorted": 0.4188750679824798,
+   "share_interaction": 0.5333455831300364,
+   "months": {
+    "already x*": 0.0125,
+    "unchanged": 0.2375,
+    "steered": 0.71875,
+    "to x*": 0.03125
+   }
+  },
+  "0.35": {
+   "full": 0.1370369855948119,
+   "only_distorted": 0.05608328148199335,
+   "only_unchanged": 0.013535660436712348,
+   "excess": 0.12379634155650908,
+   "share_unchanged": 0.002383078487621281,
+   "share_distorted": 0.34607353420160836,
+   "share_interaction": 0.6515433873107703,
+   "months": {
+    "already x*": 0.0,
+    "unchanged": 0.303125,
+    "steered": 0.690625,
+    "to x*": 0.00625
+   }
+  },
+  "0.4": {
+   "full": 0.21257170652300766,
+   "only_distorted": 0.0950604414479533,
+   "only_unchanged": 0.015474119569975834,
+   "excess": 0.19933106248470484,
+   "share_unchanged": 0.011204854395658471,
+   "share_distorted": 0.41047188727009726,
+   "share_interaction": 0.5783232583342444,
+   "months": {
+    "already x*": 0.0,
+    "unchanged": 0.275,
+    "steered": 0.725,
+    "to x*": 0.0
+   }
+  },
+  "0.5": {
+   "full": 0.24118461841003086,
+   "only_distorted": 0.14439186043154287,
+   "only_unchanged": 0.017111983316711078,
+   "excess": 0.22794397437172803,
+   "share_unchanged": 0.01698373159053081,
+   "share_distorted": 0.5753660159463587,
+   "share_interaction": 0.4076502524631105,
+   "months": {
+    "already x*": 0.0,
+    "unchanged": 0.328125,
+    "steered": 0.671875,
+    "to x*": 0.0
+   }
+  },
+  "1.0": {
+   "full": 0.39556752557555336,
+   "only_distorted": 0.30848084732054093,
+   "only_unchanged": 0.01867557144284273,
+   "excess": 0.38232688153725053,
+   "share_unchanged": 0.01421539438369411,
+   "share_distorted": 0.7722193168713211,
+   "share_interaction": 0.21356528874498482,
+   "months": {
+    "already x*": 0.0,
+    "unchanged": 0.34375,
+    "steered": 0.65625,
+    "to x*": 0.0
+   }
+  },
+  "2.0": {
+   "full": 0.4889497554064671,
+   "only_distorted": 0.37581326460587633,
+   "only_unchanged": 0.01691992110340048,
+   "excess": 0.4757091113681643,
+   "share_unchanged": 0.007734300178770744,
+   "share_distorted": 0.7621729580179696,
+   "share_interaction": 0.23009274180325967,
+   "months": {
+    "already x*": 0.0,
+    "unchanged": 0.3,
+    "steered": 0.7,
+    "to x*": 0.0
+   }
+  }
+ }
+}
