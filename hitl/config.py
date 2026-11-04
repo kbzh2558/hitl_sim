@@ -49,7 +49,7 @@ class Run:
     k_max: int = 500
     proposer: str = "learner"
     human_model: str = "attention"
-    loss_aversion: float = 0.25
+    loss_aversion: float = 0.3
     ref_terms: str = "all"
     ref_level: str = "plan"
     ref_shape: str = "squared"
