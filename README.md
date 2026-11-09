@@ -1,63 +1,47 @@
-# Human-in-the-loop simulator (V5)
+# Human-in-the-loop simulator: modify vs choose
 
-A closed loop:
-1. A learner proposes plans.
-2. A human who knows the true objective responds, influenced by the proposal. Default ("attention"): attribute weights are tilted by exp(λ·s_r(q)), among plans truly no worse than q. Alternative ("loss"): losses relative to the proposal weigh more.
-3. The learner refits.
-4. An oracle baseline runs alongside on the same months.
+A machine learns a cargo planner's preferences from the planner's responses. The simulator compares two interfaces that use the same human decision model and the same learner:
+- **Setup A, modify:** the human explores random feasible edits of the machine's plan within radius r.
+- **Setup B, choose:** the machine shows its plan plus k − 1 plans drawn uniformly from its ε-near-optimal region.
 
-All 36 assumptions are listed in `ASSUMPTIONS.md`.
+## Run it
 
 ```
-cd hitl_sim                                # the shared folder
-pip install -r requirements.txt            # Python 3.10 or newer
-streamlit run app.py                       # interface
-python -m hitl.sweep my_sweep.json 10      # grid from the command line -> results/<name>/
+pip install -r requirements.txt
+streamlit run app.py
 ```
 
-## World
-- Readable cargoes, ships and 26 primitive pair attributes, listed with their meaning in the app.
-- The truth has two parts:
-  - 8 familiar terms;
-  - three hidden preferences, each with a weight you set in plain units: urgent cargo waiting beyond τ_w (w_u per day), long empty trips (w_b × (ballast − δ_b)²), special cargo on a basic-service ship (π per cargo).
-- **True reason vs proxy, no clusters:** T = special cargo on a basic ship (true, never given), and P = special cargo on a destination-mismatched ship (in the initial model, weight P₀, truth 0). For special cargo, premium service goes with destination fit on close ships (a_near) and less so on distant ones (a_far). Exploration and λ only change which comparisons get made.
-- **Choice learning:** with k > 1 and "choice" on, the learner also uses "the picked plan beat each other shown plan".
-- **Orthogonal residual:** the network's output is projected off the known terms on plan differences, so it cannot simply reweight what the linear part already has.
-- Default learner: it sees every attribute, but its objective is misspecified. It has a linear weight on all 8 familiar terms (d wrong, 8 − d at 0) and no nonlinear preferences, which only its network can learn. "Withhold attributes" (with u) is the information control.
-- Main world settings:
-  - d: terms the learner's linear part knows;
-  - w_u, w_b, π: true weights of the hidden preferences (0 switches one off);
+Press **Run simulation**. Every listed value of B (human evaluation capacity), r and k is run for both setups, plus three controls and a reference, over several replicates:
+- no response (B = 0);
+- random response;
+- exact evaluation (B = ∞);
+- r = ∞ reference: the true best plan overall.
 
-## One month
-1. **Score.** Each model's own best plan is scored against the truth before any response, by regret and by match with x\*.
-2. **Propose.** Candidates are the plans within ε of the learner's best (Murty's algorithm, up to K_max). k are shown, and the human starts from the truly best shown plan q.
-3. **Respond.** x^H = argmin over all feasible plans of F\*(x) + λ Σ_r ν_r [A_r(x) − A_r(q)]₊² (plan totals, squared; linear and per-cargo variants selectable), solved exactly. The change is recorded as groups, biggest first. F\*(x^H) ≤ F\*(q); λ = 0 gives x\*; nested in λ.
-4. **Refit.** The learner cost is c′d + b′φ(z), with φ a one-layer network giving h learned features from the attributes the learner can see (u are hidden from it).
-   - On every past (q, x^H), structured hinge: x^H must beat every feasible plan y by μ per differing cargo; y is found by exact loss-augmented search. The learner knows nothing of λ.
-   - The residual is projected off the known terms on plan differences; λ_wd weight decay.
-   - Training uses Adam, with E passes per month. After each step the model is rescaled to the truth's cost spread over real pairs; the update is scale-neutral and learned-feature weights are capped at 5× that spread (prevents blow-up).
-5. **Oracle baseline.** A linear model on the first o of the 10 true terms, with unknown terms starting at 0 and the same starting weights otherwise. It runs on its own proposals, is always shown x\*, and is refit the same way.
+## What you get
 
-## Graphs (every one shows learner and oracle baseline)
-- **Regret by month:** each month, plus the trailing average of w months.
-- **Match with x\* by month.**
-- **Traps resolved by month** and **amplification** (G\* cost of the recommended plan minus the average over plans within ε_ref of it).
-- **Objective-space map:** contour of regret over objectives written in the 10 true terms, centred on the truth. It shows the learner's path (its best reproduction in true terms) and the oracle's path from the shared start.
-- **Recovery:** the correlation, on small reassignments, between the residual's change and the change of the unknown part of the truth (missing terms + G\*). Also the whole model against the whole truth.
-- **Decision-space path:** regret from known terms against regret from missing terms + G\*. Grey diagonals mark equal total regret.
-- **Month view:** the shaded region of candidates within ε, the shown plans, the starting plan, the recorded correction, the response and x\*.
-- **Grid tab:** a table of any metric, smoothed regret and match curves with the oracle dashed, and the graphs above for any chosen setting and replicate.
+- **Per setup, four panels** (x-axis r or k, one line per B):
+  1. opportunity V;
+  2. P(human selects the best available plan);
+  3. realized improvement G = V − E;
+  4. held-out machine regret after learning.
+- **Decomposition per setup:** optimization error O against execution error E, their total O + E, and the cost of a mistake L.
+- **Interfaces compared:** held-out regret after learning against B, one line per r or k.
+- **Convergence:** distance to the true weights and held-out regret over the months, plus coverage and the gain over random response.
+- **Learning speed, objective-space map, common measures table, CSV downloads.**
 
-## Code
-| File | Contents |
-|---|---|
-| `hitl/config.py` | Parameters, symbols, readable names, ranges |
-| `hitl/world.py` | Attributes, truth (familiar terms + 3 hidden preferences), ruler |
-| `hitl/learner.py` | Linear + neural residual model, structured hinge, Adam, rescaling (gradients checked numerically) |
-| `hitl/assign.py` | Assignment, Murty enumeration, local moves, correction groups |
-| `hitl/loop.py` | Closed loop, reference-dependent human (`tilted`, `respond`), oracle baseline, scores, recovery |
-| `hitl/sweep.py` | Grids and tables |
-| `hitl/plots.py` | Figures |
-| `app.py` | Streamlit interface |
+## Model in brief
 
-The previous version (V1) is archived in the job's tmp folder (`hitl_sim_before_v2.tgz`).
+- **World:** 12 features per cargo–ship match (8 familiar, 3 nonlinear, 1 plausible but wrong). The true objective is linear in the 11 true features.
+- **Machine:** linear in all 12 features, starting from wrong weights. Every run in a replicate shares the same start, noise and random numbers.
+- **Human:** knows the true weights and perceives each match cost with noise of standard deviation s·√(U/B), where U is the decision's workload. Returns the best plan under the perceived costs:
+  - A: exact optimization within radius r;
+  - B: the cheapest menu plan.
+- **Learner:** structured hinge (margin μ = 0) refit with Adam.
+
+Full formulation: `FORMULATION.md`, or the Formulation tab. Experiment results: `RESULTS.md` and `figures/`.
+
+Code: `hitl/world.py`, `hitl/assign.py` (assignment, near-optimal enumeration, radius optimization, exchanges), `hitl/setups.py` (human, closed loop, objective map), `hitl/learner.py`, `hitl/sweep.py`, `hitl/plots.py`, `app.py`; `experiments.py` reproduces `RESULTS.md`.
+
+## History
+
+Earlier versions (the Streamlit app with a neural-network part, and the attention-human model) are in the git history up to commit `1e14958`. The fixed-error human (η), the inspection-budget human and the attention prototypes were replaced on 2026-11-08 by the noisy-evaluation human (v5).

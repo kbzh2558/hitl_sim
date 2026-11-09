@@ -1,7 +1,6 @@
 """streamlit run app.py   (from COSCO/hitl_sim)"""
-import json
-import math
-import os
+import hashlib
+import pickle
 from dataclasses import replace, fields, asdict
 from pathlib import Path
 
@@ -9,156 +8,84 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from hitl.config import World, Run, LABELS, label, help_text
-from hitl.loop import run, world_info
-from hitl.world import ATTRS, OMITTED, BASE, REF_TERMS, HIDDEN, get_world
+from hitl.config import World, Run, WF, RF, LISTS, LABELS, label, help_text
+from hitl.world import FEAT
 from hitl import plots
-from hitl.sweep import run_grid, with_references, table, METRICS, ROOT, WF, RF
+from hitl.sweep import run_all, default_workers, CTRL, _do
 
-st.set_page_config(page_title="Human-in-the-loop simulator", layout="wide")
+st.set_page_config(page_title="Modify vs choose: human-in-the-loop simulator", layout="wide")
 
-INTS = {f.name for f in fields(World) + fields(Run) if f.type in (int, "int")}
-BOOLS = {f.name for f in fields(World) + fields(Run) if f.type in (bool, "bool")}
-STRS = {f.name for f in fields(World) + fields(Run) if f.type in (str, "str")}
-REF_NAMES = [nm.split(" ")[0] for nm, _ in REF_TERMS]
+TYPES = {f.name: f.type for f in fields(World) + fields(Run)}
 DEFAULT = {**{f.name: getattr(World(), f.name) for f in fields(World)}, **{f.name: getattr(Run(), f.name) for f in fields(Run)}}
-# sections: (title, open by default, [(sub-heading or None, [parameters])])
-# sidebar: (title, open by default, [(sub-heading or None, [parameters])]); the first three sit under "Learner and machine"
 SIDEBAR = [
-    ("Learner's starting model", True, [(None, ["start_regret", "n_known", "hide", "n_hide", "oracle_terms"])]),
-    ("Network learning", False, [(None, ["hidden", "margin", "lam_wd", "lr", "epochs"])]),
-    ("Online proposal policy", True, [(None, ["eps", "n_show", "use_choice", "k_max", "proposer"])]),
-    ("Human response", True, [(None, ["human_model", "loss_aversion", "ref_level", "ref_shape", "ref_terms"])]),
-    ("Run length, seeds and reporting", False, [(None, ["T", "seed", "run_seed", "window"])]),
+    ("Machine's starting weights", True, ["start_regret", "n_known", "proxy0"]),
+    ("Learning: margin μ, learning rate α, passes E", True, ["margin", "lr", "epochs"]),
+    ("Human: evaluation capacity B (both setups)", True, ["budgets", "workload", "control"]),
+    ("Setup A: modify one plan", True, ["r_values"]),
+    ("Setup B: choose among k plans", True, ["k_values", "eps", "k_max"]),
+    ("Run length, replicates and seeds", False, ["T", "n_test", "draws", "reps", "window", "seed", "run_seed"]),
 ]
-# the World Features Parameters page
 WORLD_PAGE = [
-    ("True planner: hidden preferences and familiar weights", ["wait_threshold", "urgent_wait_weight", "ballast_threshold",
-                                                              "ballast_weight", "w_low", "w_high"]),
-    ("Special cargo: true reason vs wrong reason", ["trap_penalty", "proxy0", "special_share", "align_near", "align_far"]),
+    ("True planner: weights of the familiar and nonlinear features", ["w_low", "w_high", "wait_threshold", "urgent_wait_weight",
+                                                                      "ballast_threshold", "ballast_weight", "trap_penalty"]),
+    ("Special cargo", ["special_share", "align_near", "align_far"]),
     ("Months: cargoes, ships and allowed pairs", ["n_cargo", "n_ship", "slack", "density", "elig_min", "elig_max"]),
     ("Measurement", ["n_ref", "n_moves", "n_calib"]),
 ]
-SECTIONS = SIDEBAR + [("World features", False, WORLD_PAGE)]       # used by the grid tab
-ORACLE = ("**Oracle baseline** (red, dashed) = a learner that has the first o true terms as plain weights (o = 11: the "
-          "complete truth; terms the learner does not have start at 0, the learner's linear terms at its starting weights), "
-          "proposes from its own model, and is always shown the true optimum x* (no reference dependence). Refit the same way.")
-METRIC_NAMES = {
-    "regret_last": "regret, last w months", "oracle_regret_last": "oracle baseline regret, last w months",
-    "regret_first": "regret, first w months", "regret_avg": "regret, all months", "oracle_regret_avg": "oracle regret, all months",
-    "eps0_regret_last": "regret, last w months, same setting with ε = 0",
-    "match_last": "match with x*, last w months", "oracle_match_last": "oracle match with x*, last w months",
-    "special_basic_last": "excess special cargo on basic ships vs x* (per cargo), last w months",
-    "special_mismatch_last": "excess special cargo on mismatched ships vs x* (per cargo), last w months",
-    "info_corr_end": "corr(ΔT, ΔP) over all feedback collected (end)", "info_disagree_end": "share of comparisons with ΔT ≠ ΔP (end)",
-    "proxy_weight_end": "learned weight on the proxy P (truth 0), end",
-    "pen_special_end": "learned basic-ship cost, special cargo (end)", "pen_ordinary_end": "learned basic-ship cost, ordinary cargo (end)",
-    "hidden_regret_last": "extra hidden cost of the recommended plan vs the best plan, last w months",
-    "regret_known_last": "regret from the known terms, last w months",
-    "regret_unknown_last": "regret from missing terms + G*, last w months",
-    "optimism_last": "optimism of the learner about its plan, last w months",
-    "recovery_last": "residual recovery of the unknown part (final, correlation)",
-    "oracle_recovery_last": "oracle recovery of the unknown part (final)", "model_corr_last": "whole-model agreement with the truth (final)",
-    "start_regret_achieved": "achieved starting regret R₀", "start_regret_min": "lowest possible starting regret",
-    "fit_last": "share of the learner's model written in the true terms (final)", "hidden_share": "share of the true cost from the hidden preferences",
-    "unknown_share": "share of the truth the initial model does not know", "proposal_regret": "regret of the plan the human starts from",
-    "improvement_share": "share of the possible improvement the human returned", "changed": "cargoes the human reassigned",
-    "reached_xstar": "share of months the human's response is x*",
-    "stall_last": "share of months the human leaves a non-optimal proposal unchanged, last w months",
-    "K_mean": "candidates within ε", "capped_months": "months where K_max was hit", "shown_mean": "plans shown",
-    "model_agreed": "share of months the learner already preferred the human's response"}
+INT_KEYS = {k for k, t in TYPES.items() if t in (int, "int")}
+CACHE = Path(__file__).parent / "results" / "app_cache"
+CACHE_VERSION = "v5-2026-11-08"          # change when the model changes, so old saved runs are not shown
+
+
+def cache_path(w, r):
+    """Saved-run file for these exact settings (numbers normalised so widget types do not matter)."""
+    norm = lambda v: tuple(norm(x) for x in v) if isinstance(v, tuple) else (float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v)
+    key = repr((CACHE_VERSION, sorted((k, norm(v)) for k, v in asdict(w).items()), sorted((k, norm(v)) for k, v in asdict(r).items())))
+    return CACHE / (hashlib.md5(key.encode()).hexdigest() + ".pkl")
 
 
 def widget(name, key):
-    lo, hi = LABELS[name][3]
-    if name == "ref_terms":
-        d = DEFAULT[name]; pre = REF_NAMES if d == "all" else [x.strip() for x in d.replace("+", ",").split(",")]
-        sel = st.multiselect(label(name), REF_NAMES, default=pre, key=key, help=help_text(name))
-        return "all" if set(sel) == set(REF_NAMES) else "+".join(sel)
-    if name == "ref_level":
-        return st.selectbox(label(name), ["plan", "cargo"], index=["plan", "cargo"].index(DEFAULT[name]), key=key, help=help_text(name))
-    if name == "proposer":
-        return st.selectbox(label(name), ["learner", "fixed"], index=["learner", "fixed"].index(DEFAULT[name]), key=key, help=help_text(name))
-    if name == "human_model":
-        return st.selectbox(label(name), ["loss", "attention"], index=["loss", "attention"].index(DEFAULT[name]), key=key, help=help_text(name))
-    if name == "ref_shape":
-        return st.selectbox(label(name), ["squared", "linear"], index=["squared", "linear"].index(DEFAULT[name]), key=key, help=help_text(name))
-    if name in BOOLS:
-        return st.checkbox(label(name), value=bool(DEFAULT[name]), key=key, help=help_text(name))
-    if name in INTS:
-        return st.number_input(label(name), value=int(DEFAULT[name]), step=1, key=key, help=help_text(name),
-                               min_value=None if lo is None else int(lo), max_value=None if hi is None else int(hi))
-    return st.number_input(label(name), value=float(DEFAULT[name]), format="%.4g", key=key, help=help_text(name),
-                           min_value=None if lo is None else float(lo), max_value=None if hi is None else float(hi))
+    d = DEFAULT[name]
+    if name in LISTS:
+        txt = st.text_input(label(name), ", ".join("%g" % v for v in d), key=key, help=help_text(name))   # %g writes inf
+        try:
+            v = tuple(float(x) for x in txt.split(",") if x.strip())
+            return tuple(int(x) for x in v) if name != "budgets" else v
+        except ValueError:
+            st.error("Could not read the values for %s." % LABELS[name][0]); return d
+    if name == "workload":
+        return st.selectbox(label(name), ["exposed", "minimal"], key=key, help=help_text(name))
+    if isinstance(d, bool):
+        return st.checkbox(label(name), value=d, key=key, help=help_text(name))
+    if name in INT_KEYS:
+        return int(st.number_input(label(name), value=int(d), step=1, key=key, help=help_text(name)))
+    return float(st.number_input(label(name), value=float(d), format="%.4g", key=key, help=help_text(name)))
 
 
-def run_graphs(res, w, key):
-    """The graphs shared by a single run and a run picked from a grid (learner and oracle baseline in each)."""
-    st.plotly_chart(plots.frequency_bar(plots.response_counts(res["months"]), "This run: how often each human response happens (share of months)"),
-                    width="stretch", key=key + "_freq")
-    st.plotly_chart(plots.curve(res, w), width="stretch", key=key + "_curve")
-    st.plotly_chart(plots.match_curve(res, w), width="stretch", key=key + "_match")
-    st.caption(ORACLE)
-    st.plotly_chart(plots.special_curve(res, w), width="stretch", key=key + "_spec")
-    a2, b2 = st.columns(2)
-    with a2:
-        st.plotly_chart(plots.info_curve(res), width="stretch", key=key + "_info")
-        st.caption("Each piece of feedback says one plan beats another. For each, we count how many more special cargoes the "
-                   "worse plan has on basic ships (the true reason) and on ships going elsewhere (the wrong reason).")
-    with b2:
-        st.plotly_chart(plots.proxy_curve(res, w), width="stretch", key=key + "_proxy")
-    st.plotly_chart(plots.hidden_curve(res, w), width="stretch", key=key + "_hidden")
-    st.caption("Hidden cost = the cost from the 3 hidden preferences (urgent waiting, long empty trips, special cargo on a "
-               "basic ship). Above 0: the recommended plan pays more of it than the best plan does.")
-    a, b = st.columns(2)
-    with a:
-        st.plotly_chart(plots.param_contour(res), width="stretch", key=key + "_map")
-        st.caption("Each point is an objective written in the 10 true terms (size fixed). Centre = the true objective; distance "
-                   "= angle to it in degrees. Colour = regret of the plans that objective recommends. The learner's network has "
-                   "no direct weights on the true terms, so its point is the objective in true terms that best reproduces its "
-                   "cost changes (hover: share reproduced). Both models start at the same point.")
-    with b:
-        st.plotly_chart(plots.decision_path(res, w), width="stretch", key=key + "_dec")
-        st.caption("True regret = part from the terms the initial model knows + part from everything else. Grey diagonals "
-                   "connect points with the same total regret (label = total).")
-    if res.get("network") and res["network"]["features"]:
-        net = res["network"]
-        st.plotly_chart(plots.hidden_cost_view(net), width="stretch", key=key + "_hid")
-        st.caption("Hidden cost = the part of the true cost that the learner's linear weights cannot express (the nonlinear "
-                   "preferences). Each value is for one cargo–ship pair, relative to that cargo's average ship.")
-        c1, c2 = st.columns([1, 1])
-        with c1:
-            st.markdown("**What each learned feature looks like**")
-            F = pd.DataFrame([{"learned feature": f["k"], "weight": f["weight"], "effect size": f["spread"],
-                               "looks most like": f["resembles"].replace("_", " "), "correlation": f["corr"]} for f in net["features"]])
-            st.dataframe(F.sort_values("effect size", ascending=False).round(2), hide_index=True, width="stretch")
-            st.caption("Effect size = how much the feature moves the cost (weight × its spread). Correlation 1 = the same as "
-                       "that true feature, 0 = unrelated.")
-        with c2:
-            order = sorted(net["features"], key=lambda f: -f["spread"])
-            pick = st.selectbox("learned feature", [f["k"] for f in order], key=key + "_feat")
-            st.plotly_chart(plots.feature_view(next(f for f in order if f["k"] == pick)), width="stretch", key=key + "_featplot")
+def problems(w, r):
+    out = []
+    m = w.n_cargo + w.slack if w.slack >= 0 else w.n_ship
+    if w.n_cargo > m:
+        out.append("need at least as many ships as cargoes (n ≤ m)")
+    if not 1 <= r.n_known <= 11:
+        out.append("d must be between 1 and 11")
+    if not r.budgets or any(not b > 0 for b in r.budgets):
+        out.append("B values must be above 0 (inf for exact evaluation; B = 0 is added by the controls)")
+    if not r.r_values or min(r.r_values) < 0:
+        out.append("r values must be ≥ 0")
+    if not r.k_values or min(r.k_values) < 1:
+        out.append("k values must be ≥ 1")
+    if r.eps <= 0:
+        out.append("ε must be above 0")
+    if w.w_low > w.w_high:
+        out.append("w̲ must not exceed w̄")
+    return out
 
 
-def metric_row(res, info, w):
-    E = pd.DataFrame(res["evals"]); O = pd.DataFrame(res["oracle"]); Rc = res["recovery"][-1]
-    c = st.columns(7)
-    c[0].metric("regret, first %d months" % w, "%.3f" % E.regret.iloc[:w].mean())
-    c[1].metric("regret, last %d months" % w, "%.3f" % E.regret.iloc[-w:].mean(),
-                "%.3f" % (E.regret.iloc[-w:].mean() - E.regret.iloc[:w].mean()), delta_color="inverse")
-    c[2].metric("oracle, last %d months" % w, "%.3f" % O.regret.iloc[-w:].mean(), help=ORACLE.replace("**", ""))
-    c[3].metric("match with x*, last %d" % w, "%.2f" % E.match.iloc[-w:].mean(), help="oracle: %.2f" % O.match.iloc[-w:].mean())
-    c[4].metric("residual recovery", "%.2f" % Rc["learner_residual"], help="Final correlation of the residual with the unknown part of the truth.")
-    c[5].metric("hidden share of the true cost", "%.2f" % info["hidden_share"], help="Share of the true cost differences between plans that comes from the 3 hidden preferences.")
-    c[6].metric("truth unknown at start", "%.2f" % info["unknown_share"], help="Share of the true cost variation in the missing terms + G*.")
-
-
-tab1, tab2, tab4, tab3 = st.tabs(["Single run", "Grid of runs", "World Features Parameters", "Assumptions"])
+tab_res, tab_world, tab_form = st.tabs(["Results", "World Features Parameters", "Formulation"])
 vals = {}
-
-with tab4:
-    st.markdown("Settings of the simulated world: what the planner truly wants, the special cargo, and the size and shape "
-                "of each month. They apply to the single run and are the starting values of the grid.")
+with tab_world:
+    st.markdown("Settings of the simulated world: what the planner truly wants, the special cargo, and the size and shape of each month.")
     for title, names in WORLD_PAGE:
         with st.container(border=True):
             st.markdown("**%s**" % title)
@@ -170,216 +97,176 @@ with tab4:
 with st.sidebar:
     st.header("Parameters")
     go_run = st.button("Run simulation", type="primary", width="stretch")
-    st.caption("World settings are on the **World Features Parameters** tab.")
-    for q, (title, opened, subs) in enumerate(SIDEBAR):
-        if q == 0:
-            st.markdown("**Learner and machine**")
-        if q == 3:
-            st.markdown("**Human and run**")
+    st.caption("World settings are on the **World Features Parameters** tab. Every listed value of B, r and k is run for both setups.")
+    for title, opened, names in SIDEBAR:
         with st.expander(title, expanded=opened):
-            for sub, names in subs:
-                if sub:
-                    st.markdown("**%s**" % sub)
-                for n in names:
-                    if n in ("ref_level", "ref_shape", "ref_terms") and vals.get("human_model") == "attention":
-                        vals[n] = DEFAULT[n]; continue        # reference-loss settings only
-                    if n == "n_hide" and not vals.get("hide", False):
-                        vals[n] = DEFAULT[n]; continue        # u only matters when attributes are withheld
-                    vals[n] = widget(n, "p_" + n)
+            for n in names:
+                vals[n] = widget(n, "p_" + n)
+    with st.expander("Computation", expanded=False):
+        workers = int(st.number_input("parallel workers", 1, 64, default_workers(), help="Runs computed at the same time."))
 wcfg = replace(World(), **{k: v for k, v in vals.items() if k in WF})
 rcfg = replace(Run(), **{k: v for k, v in vals.items() if k in RF})
 
-with tab1:
+with tab_res:
     if go_run:
-        try:
-            with st.spinner("running"):
-                res = run(wcfg, rcfg, detail=True); info = world_info(wcfg)
-            st.session_state.single = (wcfg, rcfg, res, info)
-        except (AssertionError, ValueError) as e:
-            st.error("Invalid parameters: need n ≤ m and 1 ≤ d ≤ 8, and known attribute names in ν. %s" % e)
-    if "single" not in st.session_state:
-        st.info("Set parameters in the sidebar and press **Run simulation**.")
-    else:
-        w0, r0, res, info = st.session_state.single
-        if (w0, r0) != (wcfg, rcfg):
-            st.warning("Sidebar values changed since this run; press **Run simulation** to update.")
-        E, M = pd.DataFrame(res["evals"]), pd.DataFrame(res["months"]).drop(columns="detail")
-        wn = max(1, min(r0.window, len(E)))
-        st.caption("Learner's starting model: a weight on each of %d familiar terms (+ the wrong reason); %d of them start at "
-                   "wrong weights, the rest at 0; no hidden preferences. Withheld from the learner: %s. Human: proposal "
-                   "influence λ = %g (%s). Starting regret requested %.3f, achieved %.3f (lowest possible %.3f). Every score "
-                   "is the plan recommended in month t, scored before the human responds." % (
-                       info["n_linear"] - 1, w0.n_known, ", ".join(info["hidden_attrs"]) or "nothing", r0.loss_aversion,
-                       "attention" if r0.human_model == "attention" else "reference loss", r0.start_regret, res["start_regret"],
-                       res["min_start"]))
-        metric_row(res, info, wn)
-        run_graphs(res, wn, "single")
-        t = st.slider("month", 0, w0.T - 1, 0)
-        st.plotly_chart(plots.month_view(res["months"][t], w0.n_cargo, r0.eps), width="stretch")
-        with st.expander("Per-month log"):
-            st.dataframe(E.add_prefix("learner_").join(pd.DataFrame(res["oracle"]).add_prefix("oracle_")).join(M).round(4), width="stretch")
-        with st.expander("Weights at the end vs the truth"):
-            Wd = res["world"]; K = Wd.lin
-            T1 = pd.DataFrame({"term": [ATTRS[k][0] for k in K], "meaning": [ATTRS[k][1] for k in K],
-                               "start": ["wrong weight" if k in Wd.known_familiar else "wrong reason" if k == K[-1] else "0 (missing)" for k in K],
-                               "true weight": Wd.natural(K), "learned": Wd.natural(K, res["c_final"])})
-            if res.get("network"):
-                im = res["network"]["implied"]
-                T1 = pd.concat([T1, pd.DataFrame({"term": im["names"], "meaning": [m for _, m in OMITTED],
-                                                  "start": "not in the model", "true weight": im["true"], "learned": im["learned"]})])
-            st.dataframe(T1.round(3), hide_index=True)
-            st.caption("Weights are per unit of each attribute (per day, per 1000 nm, per cargo, ...), in cost units.")
-            if res.get("network"):
-                st.caption("The last three rows are not weights the learner has: they are the weights that best reproduce what its "
-                           "network learned. Together they explain %.0f%% of the network's effect." % (100 * res["network"]["implied"]["explained"]))
-        with st.expander("The world's attributes and the true planner"):
-            Wd = res["world"]
-            rows_ = [(nm, mean, "familiar term %d%s" % (BASE.index(i) + 1, " (known, wrong weight)" if i in Wd.known_familiar else " (missing, weight 0)" if i in Wd.lin else " (withheld)") if i in BASE else "attribute only",
-                      round(float(Wd.natural([i])[0]), 3)) for i, (nm, mean) in enumerate(ATTRS)]
-            rows_ += [(nm, mean, "hidden preference", round(float(Wd.natural([k])[0]), 3)) for (nm, mean), k in zip(OMITTED, HIDDEN)]
-            st.dataframe(pd.DataFrame(rows_, columns=["attribute", "meaning", "role in the truth", "true weight"]), hide_index=True)
-
-with tab2:
-    st.markdown("Each row is one parameter. **One value = fixed at that value; several comma-separated values = varied** "
-                "(for ν: 'all' or names joined by +, several settings separated by ;) "
-                "(every combination is run). Rows start at the current values (sidebar and World Features Parameters tab). ε = 0 is always added as the "
-                "no-exploration reference. Replicate r uses world seed + r and run seed + r; within a replicate every "
-                "combination shares the same months and random numbers.")
-    axes, fixed_vals, bad = {}, {}, []
-    for title, opened, subs in SECTIONS:
-        names = [n for _, ns in subs for n in ns if n not in ("seed", "run_seed", "window")]
-        if not names:
-            continue
-        with st.expander(title, expanded=opened):
-            ed0 = pd.DataFrame({"parameter": [label(n) for n in names], "values": [str(vals[n]) for n in names],
-                                "what it controls": [LABELS[n][2] for n in names]})
-            ed = st.data_editor(ed0, hide_index=True, width="stretch", disabled=["parameter", "what it controls"],
-                                key="grid_%s_%d" % (title[:6], hash(tuple(ed0["values"]))))
-        for n, row in zip(names, ed.itertuples()):
+        bad = problems(wcfg, rcfg)
+        if bad:
+            st.error("Cannot run: " + "; ".join(bad) + ".")
+        else:
+            bar = st.progress(0.0, text="starting")
+            rc, fixed, loops = run_all(wcfg, rcfg, workers, progress=lambda f, d, n: bar.progress(f, text="%d of %d runs" % (d, n)))
+            bar.empty(); st.session_state.res = (wcfg, rcfg, rc, fixed, loops); st.session_state.pop("map", None)
             try:
-                sep = ";" if n in STRS else ","
-                v = [x if n in STRS else (x.lower() in ("true", "1", "on", "yes")) if n in BOOLS else int(float(x)) if n in INTS else float(x)
-                     for x in str(row.values).replace(" ", "").split(sep) if x]
-            except ValueError:
-                bad.append(label(n)); continue
-            if len(v) > 1:
-                axes[n] = v
-            elif len(v) == 1:
-                fixed_vals[n] = v[0]
-    gw = replace(wcfg, **{k: v for k, v in fixed_vals.items() if k in WF})
-    gr = replace(rcfg, **{k: v for k, v in fixed_vals.items() if k in RF})
-    c1, c2, c3 = st.columns(3)
-    reps = c1.number_input("replicates", 1, 500, 5); workers = c2.number_input("parallel workers", 1, 64, min(10, max(1, (os.cpu_count() or 2) - 1)))
-    name = c3.text_input("save as (results/<name>)", "grid")
-    n_runs = int(reps) * (math.prod(len(v) for v in axes.values()) if axes else 1)
-    changed = ["%s = %s" % (LABELS[k][0], v) for k, v in fixed_vals.items() if v != vals[k]]
-    st.caption("varying: %s · fixed values that differ from the sidebar: %s · about %d runs" % (
-        "; ".join("%s ∈ {%s}" % (LABELS[k][0], ", ".join(map(str, v))) for k, v in axes.items()) or "nothing",
-        ", ".join(changed) or "none", n_runs))
-    if bad:
-        st.error("Could not read values for: " + ", ".join(bad))
-    elif st.button("Run grid", type="primary"):
-        if (gw.slack < 0 and gw.n_cargo > gw.n_ship) or not 1 <= gw.n_known <= 8:
-            st.error("Invalid fixed values: need n ≤ m and 1 ≤ d ≤ 8."); st.stop()
-        bar = st.progress(0.0)
-        keys, df, cv = run_grid(gw, gr, axes or {"eps": [gr.eps]}, int(reps), int(workers), progress=bar.progress)
-        df = with_references(df, keys); out = ROOT / name; out.mkdir(parents=True, exist_ok=True)
-        df.to_csv(out / "summary.csv", index=False); cv.to_csv(out / "curves.csv", index=False)
-        json.dump(dict(world=asdict(gw), run=asdict(gr), axes=axes, reps=int(reps), keys=keys), open(out / "spec.json", "w"), indent=1)
-        st.session_state.grid = (keys, df, cv); st.success("saved to %s" % out)
-    saved = sorted(p.name for p in ROOT.glob("*") if (p / "summary.csv").exists()) if ROOT.exists() else []
-    if saved:
-        lc1, lc2 = st.columns([3, 1]); pick = lc1.selectbox("or load a saved grid", ["—"] + saved)
-        if pick != "—" and lc2.button("Load"):
-            df = pd.read_csv(ROOT / pick / "summary.csv"); cv = pd.read_csv(ROOT / pick / "curves.csv")
-            spec = ROOT / pick / "spec.json"
-            keys = json.load(open(spec))["keys"] if spec.exists() else [k for k in WF + RF if k in df.columns]
-            st.session_state.grid = (keys, df, cv)
-    if "grid" in st.session_state:
-        keys, df, cv = st.session_state.grid
-        varied = [k for k in keys if df[k].nunique() > 1] or keys[:1]
-        st.divider()
-        with st.expander("Table", expanded=True):
-            c1, c2, c3 = st.columns(3)
-            mets = [m for m in METRICS + ["eps0_regret_last"] if m in df]
-            metric = c1.selectbox("metric", mets, format_func=lambda m: METRIC_NAMES.get(m, m))
-            rows = c2.selectbox("rows", varied, format_func=label)
-            cols_ax = c3.selectbox("columns", ["—"] + [k for k in varied if k != rows], format_func=lambda k: k if k == "—" else label(k))
-            cols_ax = None if cols_ax == "—" else cols_ax
-            fixed = {}; rest = [k for k in varied if k not in (rows, cols_ax)]
-            if rest:
-                fc = st.columns(len(rest))
-                for i, k in enumerate(rest):
-                    v = fc[i].selectbox("fix " + label(k), ["all (average)"] + sorted(df[k].unique().tolist()), key="fix_" + k)
-                    if v != "all (average)":
-                        fixed[k] = v
-            mean, se = table(df, metric, rows, cols_ax, fixed)
-            mean.index = ["%s = %s" % (LABELS[rows][0], v) for v in mean.index]; se.index = mean.index
-            if cols_ax:
-                mean.columns = ["%s = %s" % (LABELS[cols_ax][0], v) for v in mean.columns]; se.columns = mean.columns
-            st.markdown("**%s** — mean (se) over replicates" % METRIC_NAMES.get(metric, metric))
-            st.dataframe(mean.round(3).astype(str) + " (" + se.round(3).astype(str) + ")", width="stretch")
-            st.caption(ORACLE)
-            st.download_button("download summary.csv", df.to_csv(index=False), "summary.csv")
-        with st.expander("Regret and match curves", expanded=True):
-            raw = st.checkbox("also show the unsmoothed monthly averages", False)
-            st.plotly_chart(plots.sweep_curves(cv, cols_ax or rows, fixed, int(rcfg.window), "regret", raw), width="stretch")
-            st.plotly_chart(plots.sweep_curves(cv, cols_ax or rows, fixed, int(rcfg.window), "match", raw), width="stretch")
-            st.caption("Smoothing window w = %d months (sidebar → Seeds and reporting). Colours follow the table's columns "
-                       "(or rows); other settings as fixed above, or averaged." % rcfg.window)
-        with st.expander("Graphs of one run from this grid", expanded=True):
-            if not all(c in df.columns for c in WF + RF):
-                st.info("This grid was saved before full settings were recorded; rerun it to see single-run graphs.")
-            else:
-                pc = st.columns(len(varied) + 1); pickv = {}
-                for i, k in enumerate(varied):
-                    pickv[k] = pc[i].selectbox(label(k), sorted(df[k].unique().tolist()), key="pick_" + k)
-                rep = pc[-1].selectbox("replicate", sorted(df.rep.unique().tolist()), key="pick_rep")
-                sel = df[(df.rep == rep)]
-                for k, v in pickv.items():
-                    sel = sel[sel[k] == v]
-                if len(sel):
-                    row = sel.iloc[0]
-                    cast = lambda k: str(row[k]) if k in STRS else (str(row[k]).lower() == "true") if k in BOOLS else int(row[k]) if k in INTS else float(row[k])
-                    w1 = World(**{k: cast(k) for k in WF}); r1 = Run(**{k: cast(k) for k in RF})
-                    with st.spinner("rerunning this setting"):
-                        res1 = run(w1, r1); info1 = world_info(w1)
-                    wn1 = max(1, min(r1.window, w1.T))
-                    metric_row(res1, info1, wn1)
-                    run_graphs(res1, wn1, "grid")
-        with st.expander("Configuration of this grid (fixed values)"):
-            par = [c for c in WF + RF if c in df.columns and c not in ("seed", "run_seed")]
-            st.dataframe(pd.DataFrame({"parameter": [label(c) for c in par if df[c].nunique() == 1],
-                                       "value": [df[c].iloc[0] for c in par if df[c].nunique() == 1]}), hide_index=True)
-        with st.expander("All rows"):
-            st.dataframe(df.round(4), width="stretch")
+                CACHE.mkdir(parents=True, exist_ok=True); pickle.dump(st.session_state.res, open(cache_path(wcfg, rcfg), "wb"))
+            except OSError as e:
+                st.warning("Could not save this run (%s)." % e)
+    if "res" not in st.session_state and cache_path(wcfg, rcfg).exists():
+        try:
+            st.session_state.res = pickle.load(open(cache_path(wcfg, rcfg), "rb")); st.session_state.loaded = True
+        except Exception:
+            pass
+    if "res" not in st.session_state:
+        st.info("Set parameters in the sidebar and press **Run simulation**. With the defaults: 171 runs, about a minute. Finished runs are saved and reloaded for the same settings.")
+    else:
+        w0, r0, rc, fixed, loops = st.session_state.res
+        if (w0, r0) != (wcfg, rcfg):
+            if cache_path(wcfg, rcfg).exists():
+                st.session_state.res = pickle.load(open(cache_path(wcfg, rcfg), "rb")); st.session_state.pop("map", None); st.rerun()
+            st.warning("Settings changed since these results; press **Run simulation** to update.")
+        elif st.session_state.get("loaded"):
+            st.caption("Showing the saved run for these settings. Press **Run simulation** to run it again.")
+        L0 = next(o for o in loops if o["rep"] == 0)
+        st.caption("%d replicate(s). Starting weights: the first %d of the 11 true features at wrong weights, the other %d at 0, the wrong "
+                   "feature at %g. Starting regret asked %g, achieved %.3f (lowest possible %.3f) in replicate 0. Every run of a replicate "
+                   "starts from these same weights and shares the same random numbers." % (r0.reps, r0.n_known, 11 - r0.n_known, r0.proxy0,
+                                                                                           r0.start_regret, L0["start_regret"], L0["start_lowest"]))
+        for s in ("A", "B"):
+            st.subheader("Setup A: modify one proposal" if s == "A" else "Setup B: choose among k plans")
+            st.caption(("The human returns the best plan within r changes of the machine's plan, judged by perceived match costs (noise sd = s·√(U/B), "
+                        "U = %s workload)." % r0.workload) if s == "A" else
+                       ("The machine shows its plan plus k − 1 plans drawn uniformly from the plans it rates within ε = %g of its best; the human returns "
+                        "the cheapest one under perceived match costs (U = %s workload). The menu does not depend on the human, so V is the same for every B." % (r0.eps, r0.workload)))
+            st.plotly_chart(plots.setup_panels(rc, fixed, loops, s), width="stretch", key="panels" + s)
+            st.caption("The first three panels hold the proposal fixed (the starting weights' plan on the held-out months, %d noise draws each). "
+                       "The last panel uses separate closed-loop runs: average held-out regret of the last %d months." % (r0.draws, r0.window))
+            st.markdown("**At the end of learning: optimization error versus execution error**")
+            st.plotly_chart(plots.decomposition(rc, loops, s), width="stretch", key="decomp" + s)
+            st.caption("Each run's final weights propose plans on the held-out months (%d noise draws each), and the human responds with the "
+                       "run's own capacity B. Human plan vs the best plan overall = O + E. Optimization error O = best available plan vs the best plan "
+                       "overall: what the decision set cannot fix, given how far that run's machine learned (so it also depends on B). Execution "
+                       "error E = the human's plan vs the best available plan. Expected realized improvement = V − (1 − P)·L, so a falling P only "
+                       "hurts as much as a mistake costs." % r0.draws)
 
-with tab3:
+        st.subheader("Interfaces compared: learning against human capacity")
+        st.plotly_chart(plots.interface_comparison(rc, loops), width="stretch", key="iface")
+        st.caption("Held-out regret after learning (last %d months, average over replicates) at each human capacity B. Where the lines cross, "
+                   "more freedom stops helping learning. B = 0 (no response) stays at the starting regret." % r0.window)
+
+        st.subheader("Convergence")
+        c1, c2, c3 = st.columns(3)
+        bdef = rc.budgets.index(300.0) if 300.0 in rc.budgets else len(rc.budgets) // 2
+        bsel = c1.selectbox("human capacity", rc.budgets, index=bdef, format_func=plots.b_name, key="conv_b")
+        rr = c2.selectbox("Setup A: radius", rc.r_values, index=min(2, len(rc.r_values) - 1), format_func=lambda x: "r = %d" % x, key="conv_r")
+        kk = c3.selectbox("Setup B: plans shown", rc.k_values, index=len(rc.k_values) - 1, format_func=lambda x: "k = %d" % x, key="conv_k")
+        st.plotly_chart(plots.convergence(rc, loops, bsel, rr, kk), width="stretch", key="conv")
+        st.caption("Average over replicates; month 0 = the shared starting weights. Dashed: the same setting with B = 0 (coin-flip comparisons). "
+                   "Distance is the angle between the learned and the true weights, since only their direction matters "
+                   "(doubling every weight changes no decision).")
+
+        st.subheader("What the human's answers add")
+        c1, c2, c3 = st.columns(3)
+        b4 = c1.selectbox("human capacity", rc.budgets, index=bdef, format_func=plots.b_name, key="fv_b")
+        r4 = c2.selectbox("Setup A: radius", rc.r_values, index=min(2, len(rc.r_values) - 1), format_func=lambda x: "r = %d" % x, key="fv_r")
+        k4 = c3.selectbox("Setup B: plans shown", rc.k_values, index=len(rc.k_values) - 1, format_func=lambda x: "k = %d" % x, key="fv_k")
+        st.plotly_chart(plots.feedback_value(rc, loops, b4, r4, k4), width="stretch", key="fv")
+        st.caption("Left: coverage = best available improvement V_t ÷ the machine's regret R_t in that training month (months with R_t = 0 "
+                   "skipped, 5-month trailing mean). 0 = nothing in the set could fix the machine's mistake; 1 = the set contains the true best plan. "
+                   "Right: preference-specific gain = held-out regret of the matched random-choice run (B = 0: same months, same start, same "
+                   "plans offered at month 0) minus held-out regret with the human. Above 0: the human's answers carry information the learner "
+                   "could not get from its own updates. The r = ∞ reference has no matched random-choice run, so it appears only on the left.")
+
+        st.subheader("Learning speed")
+        b2 = st.selectbox("human capacity", rc.budgets, index=bdef, format_func=plots.b_name, key="speed_b")
+        st.plotly_chart(plots.learning_speed(rc, loops, b2), width="stretch", key="speed")
+
+        st.subheader("Objective space: how the machine's weights converge")
+        c1, c2, c3, c4 = st.columns(4)
+        b3 = c1.selectbox("human capacity", rc.budgets, index=bdef, format_func=plots.b_name, key="map_b")
+        r3 = c2.selectbox("Setup A: radius", rc.r_values, index=min(2, len(rc.r_values) - 1), format_func=lambda x: "r = %d" % x, key="map_r")
+        k3 = c3.selectbox("Setup B: plans shown", rc.k_values, index=len(rc.k_values) - 1, format_func=lambda x: "k = %d" % x, key="map_k")
+        rep3 = c4.selectbox("replicate", list(range(r0.reps)), key="map_rep")
+        find = lambda s, h: next(o for o in loops if o["setup"] == s and o["h"] == h and o["B"] == b3 and o["rep"] == rep3)
+        a, b = find("A", r3), find("B", k3); key = (b3, r3, k3, rep3)
+        orc = next(o for o in loops if o["setup"] == "O" and o["rep"] == rep3)
+        if st.session_state.get("map", (None,))[0] != key:
+            with st.spinner("computing the map"):
+                st.session_state.map = (key, _do(("map", replace(w0, seed=w0.seed + rep3), [a["path"], b["path"], orc["path"]])))
+        st.plotly_chart(plots.objective_map(st.session_state.map[1], ["Setup A, r = %d" % r3, "Setup B, k = %d" % k3, "r = ∞ reference (true best plan, no error)"]), width="stretch", key="map")
+        st.caption("Each point is a set of weights (only directions matter). The centre is the true weights; distance from the centre = angle "
+                   "to them in degrees. Colour = regret of the plans those weights recommend. Both runs start from the same weights. "
+                   "Being closer to the true weights does not always mean lower regret: a weight that is wrong on a feature that rarely changes "
+                   "which plan is best (for example the wrong-reason feature, which mostly moves together with the true reason) adds distance but little regret.")
+        st.markdown("**Weights at the start and the end, compared with the truth**")
+        st.dataframe(pd.DataFrame({"feature": [f[1] for f in FEAT], "unit": [f[3] for f in FEAT], "start (shared)": a["start"],
+                                   "end, A (r = %d)" % r3: a["end"], "end, B (k = %d)" % k3: b["end"], "end, r = ∞ reference": orc["end"], "true weight": a["truth"]}).round(3),
+                     hide_index=True, width="stretch")
+        st.caption("Per natural unit of each feature, in cost units. The machine's weights are kept at the truth's overall cost spread, so they are "
+                   "directly comparable with the true weights.")
+
+        st.subheader("Common measures")
+        rows = []
+        for s in ("A", "B"):
+            for h in (rc.r_values if s == "A" else rc.k_values):
+                for e in rc.budgets:
+                    lp = [o for o in loops if o["setup"] == s and o["h"] == h and o["B"] == e]
+                    av = lambda k: np.mean([o["avg"][k] for o in lp])
+                    rows.append({"setup": s, "freedom": "%s = %d" % ("r" if s == "A" else "k", h), "human capacity": plots.b_name(e),
+                                 "workload U": av("U"), "perception noise sd": av("noise"), "P(select best)": av("best"), "P(within 0.01)": av("within"),
+                                 "opportunity V": av("V"), "execution error E": av("E"), "optimization error O": av("O"), "realized improvement G": av("G"),
+                                 "update alignment": av("alignment"), "held-out regret after learning": np.mean([o["final"] for o in lp])})
+        O = [o for o in loops if o["setup"] == "O"]; av = lambda k: np.mean([o["avg"][k] for o in O])
+        rows.append({"setup": "reference", "freedom": "r = ∞", "human capacity": "true best plan overall", "workload U": np.nan, "perception noise sd": 0.0,
+                     "P(select best)": 1.0, "P(within 0.01)": 1.0, "opportunity V": av("V"), "execution error E": 0.0, "optimization error O": 0.0,
+                     "realized improvement G": av("G"), "update alignment": av("alignment"), "held-out regret after learning": np.mean([o["final"] for o in O])})
+        M = pd.DataFrame(rows)
+        st.dataframe(M.round(3), hide_index=True, width="stretch")
+        st.caption("Closed-loop runs, average over months and replicates (so V, E, O and G here depend on how far learning got). Workload U = distinct "
+                   "match costs the decision exposes; perception noise sd = s·√(U/B). Update alignment = (machine weights − true weights) · "
+                   "(features of the human's plan − features of the proposal), per cargo; it is always at least the realized improvement.")
+        c1, c2, c3 = st.columns(3)
+        c1.download_button("download measures.csv", M.to_csv(index=False), "measures.csv")
+        c2.download_button("download fixed_proposal.csv", fixed.to_csv(index=False), "fixed_proposal.csv")
+        curves = pd.DataFrame([dict(setup=o["setup"], h=o["h"], B=o["B"], rep=o["rep"], month=t, heldout_regret=o["held"][t], weight_angle_deg=o["dist"][t],
+                                    V=o["V"][t - 1] if t else np.nan, R=o["R"][t - 1] if t else np.nan)
+                               for o in loops for t in range(len(o["held"]))])
+        c3.download_button("download convergence_curves.csv", curves.to_csv(index=False), "convergence_curves.csv")
+
+FORM_CSS = """<style>
+.st-key-formulation table { margin-left: auto; margin-right: auto; }
+.st-key-formulation th, .st-key-formulation td { text-align: center; }
+.st-key-formulation .katex-display { text-align: center; margin: 1.1em 0; }
+.st-key-formulation p, .st-key-formulation li { line-height: 1.65; }
+</style>"""
+
+with tab_form, st.container(key="formulation"):
+    st.markdown(FORM_CSS, unsafe_allow_html=True)
     before, after = (Path(__file__).parent / "FORMULATION.md").read_text().split("<!-- FEATURES -->")
     st.markdown(before)
     with st.expander("The features built in this simulator (show / hide)"):
-        try:
-            tw = get_world(wcfg).natural(HIDDEN)
-        except AssertionError:
-            tw = [float("nan")] * 3
         st.markdown(
-            "**Hidden preference features $g$** (never given to the machine; each is built per cargo–ship match from "
-            "attributes the machine does see, then added up over the assignment):\n\n"
+            "**Familiar features** (in this order): waiting days, sailing cost, lateness, empty-trip distance, spare capacity, destination "
+            "match, preferred operator, unwanted region pair. Their true weights: a fixed sign × a random size between $\\underline w$ and "
+            "$\\bar w$, scaled to the cost unit.\n\n"
+            "**Nonlinear features** (each built per cargo–ship match from attributes the machine sees, then added up over the assignment):\n\n"
             "| Feature | Formula | Built from | True weight |\n|---|---|---|---|\n"
-            "| Urgent cargo waiting too long | $\\sum_{i,j}\\text{urgent}_i\\,\\max(0,\\,\\text{waiting}_{ij}-\\tau_w)\\,x_{ij}$ "
-            "| urgent flag, waiting days | %.3f per extra day |\n"
-            "| Long empty trips | $\\sum_{i,j}\\max(0,\\,\\text{ballast}_{ij}-\\delta_b)^2\\,x_{ij}$ "
-            "| ballast distance (1000 nm) | %.3f per (1000 nm)² |\n"
-            "| Special cargo on a basic ship | $\\sum_{i,j}\\mathbf{1}\\{\\text{special } i\\}\\,\\mathbf{1}\\{\\text{basic } j\\}\\,x_{ij}$ "
-            "| special-cargo flag, basic-service flag | %.3f per cargo |\n\n"
-            "Current thresholds: $\\tau_w$ = %.1f days, $\\delta_b$ = %.1f thousand nm (sidebar → World → True planner). "
-            "Cost unit: 1 = the cost change of one typical small reassignment on the familiar terms.\n\n"
-            "**A plausible but wrong feature in the machine's starting model.** Special cargo on a ship whose next region is "
-            "not its destination: $\\sum_{i,j}\\mathbf{1}\\{\\text{special } i\\}\\,(1-\\text{destination match}_{ij})\\,x_{ij}$. "
-            "It starts at weight $P_0$ = %.2f; its true weight is 0. For special cargo, close ships tend to have destination "
-            "match and premium service together, distant ships less so.\n\n"
-            "**Known features $d$** (the 8 familiar terms, in order of familiarity): %s. The machine's linear part has a "
-            "weight on each. The first $d$ = %d start at wrong weights and the rest at 0."
-            % (tw[0], tw[1], tw[2], vals["wait_threshold"], vals["ballast_threshold"], vals["proxy0"],
-               ", ".join(ATTRS[k][0].replace("_", " ") for k in BASE), vals["n_known"]))
+            "| Urgent cargo waiting too long | $\\sum_{i,j}\\text{urgent}_i\\,\\max(0,\\,\\text{waiting}_{ij}-\\tau_w)\\,x_{ij}$ | urgent flag, waiting days | %.3f per extra day |\n"
+            "| Long empty trips | $\\sum_{i,j}\\max(0,\\,\\text{ballast}_{ij}-\\delta_b)^2\\,x_{ij}$ | empty-trip distance (1000 nm) | %.3f per (1000 nm)² |\n"
+            "| Special cargo on a basic ship | $\\sum_{i,j}\\mathbf{1}\\{\\text{special } i\\}\\,\\mathbf{1}\\{\\text{basic } j\\}\\,x_{ij}$ | special-cargo flag, basic-service flag | %.3f per cargo |\n\n"
+            "**A plausible but wrong feature.** Special cargo on a ship whose next region is not its destination: "
+            "$\\sum_{i,j}\\mathbf{1}\\{\\text{special } i\\}\\,(1-\\text{destination match}_{ij})\\,x_{ij}$. Its true weight is 0; the machine starts "
+            "with weight $P_0$ = %.2f on it. For special cargo, close ships tend to have destination match and premium service together; "
+            "distant ships less so.\n\n"
+            "Current thresholds: $\\tau_w$ = %.1f days, $\\delta_b$ = %.1f thousand nm (World Features Parameters tab). Cost unit: 1 = the cost "
+            "change of one typical small reassignment on the familiar features."
+            % (vals["urgent_wait_weight"], vals["ballast_weight"], vals["trap_penalty"], vals["proxy0"], vals["wait_threshold"], vals["ballast_threshold"]))
     st.markdown(after)

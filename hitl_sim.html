@@ -1,0 +1,1367 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Human-in-the-loop simulator</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.11/katex.min.css">
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.11/katex.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.11/contrib/auto-render.min.js"></script>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f6f6f4; --surface: #fcfcfb; --raised: #ffffff; --line: #e2e1dc; --grid: #ecebe7;
+  --text: #0b0b0b; --text2: #52514e; --muted: #8a8984; --accent: #2a78d6; --err: #c0392b; --warnbg: #fff6e0;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #121211; --surface: #1a1a19; --raised: #222220; --line: #34332f; --grid: #2a2a27;
+    --text: #f0efec; --text2: #c3c2b7; --muted: #8f8e86; --accent: #3987e5; --err: #ff7b6b; --warnbg: #3a3018;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #121211; --surface: #1a1a19; --raised: #222220; --line: #34332f; --grid: #2a2a27;
+  --text: #f0efec; --text2: #c3c2b7; --muted: #8f8e86; --accent: #3987e5; --err: #ff7b6b; --warnbg: #3a3018;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+header { display: flex; align-items: center; gap: 24px; padding: 10px 20px; background: var(--surface); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; flex-wrap: wrap; }
+header h1 { font-size: 17px; margin: 0; font-weight: 650; }
+.tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+.tabs button { border: 0; background: none; color: var(--text2); padding: 7px 12px; border-radius: 8px; font: inherit; cursor: pointer; }
+.tabs button[aria-selected="true"] { background: var(--bg); color: var(--text); font-weight: 600; }
+.layout { display: grid; grid-template-columns: 310px minmax(0, 1fr); min-height: calc(100vh - 52px); }
+aside { background: var(--surface); border-right: 1px solid var(--line); padding: 14px; overflow-y: auto; max-height: calc(100vh - 52px); position: sticky; top: 52px; }
+main { padding: 18px 24px 60px; min-width: 0; }
+@media (max-width: 820px) { .layout { grid-template-columns: 1fr; } aside { position: static; max-height: none; border-right: 0; border-bottom: 1px solid var(--line); } main { padding: 16px; } }
+button.primary { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 9px 16px; font: inherit; font-weight: 600; cursor: pointer; }
+button.primary:disabled { opacity: .55; cursor: progress; }
+button.ghost { background: none; border: 1px solid var(--line); color: var(--text); border-radius: 8px; padding: 6px 12px; font: inherit; cursor: pointer; margin: 6px 0; }
+#go { width: 100%; margin-bottom: 6px; }
+.group { font-weight: 650; margin: 14px 0 6px; }
+details.box { border: 1px solid var(--line); border-radius: 10px; background: var(--raised); margin: 8px 0; padding: 0 12px; }
+details.box > summary { cursor: pointer; padding: 9px 0; font-weight: 600; }
+details.box[open] { padding-bottom: 10px; }
+.field { margin: 8px 0 12px; }
+.field label { display: block; font-weight: 550; margin-bottom: 3px; }
+.field input[type=number], .field select { width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--text); font: inherit; }
+.field.check { display: flex; align-items: center; gap: 8px; }
+.field.check label { display: inline; margin: 0; }
+.hint { color: var(--text2); font-size: 12.5px; margin-top: 3px; }
+.info { color: var(--muted); cursor: help; font-weight: 400; }
+.status { color: var(--text2); margin: 6px 0; min-height: 1.4em; }
+.status.err, .warn { color: var(--err); }
+.status progress { width: 220px; vertical-align: middle; }
+.stale { background: var(--warnbg); padding: 8px 12px; border-radius: 8px; margin: 8px 0; }
+.lede { color: var(--text2); max-width: 980px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 14px 0; }
+.tile { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.tv { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.tk { color: var(--text2); font-size: 12.5px; }
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 14px; }
+@media (max-width: 520px) { .two { grid-template-columns: 1fr; } }
+figure.chart { margin: 12px 0; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; min-width: 0; }
+figure.chart h3 { margin: 0; font-size: 15px; }
+.sub { margin: 2px 0 0; color: var(--text2); font-size: 12.5px; }
+.note { color: var(--text2); font-size: 12.5px; margin: 6px 0 0; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 8px 0 2px; font-size: 12.5px; color: var(--text2); }
+.li { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 18px; height: 0; border-top: 2.5px solid var(--c); display: inline-block; }
+.sw.dash { border-top-style: dashed; }
+.sw.ref { border-top: 1.5px dashed var(--muted); }
+.plotwrap { position: relative; }
+svg.plot { width: 100%; height: auto; display: block; overflow: visible; }
+svg .grid { stroke: var(--grid); stroke-width: 1; }
+svg .axis { stroke: var(--line); stroke-width: 1; }
+svg .tick { fill: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+svg .lab { fill: var(--text2); font-size: 12px; }
+svg .ref { stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 4 4; }
+svg .reflab { fill: var(--text2); font-size: 11.5px; }
+svg .cross { stroke: var(--muted); stroke-width: 1; }
+.tip { position: absolute; pointer-events: none; background: var(--raised); border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; font-size: 12px; box-shadow: 0 4px 14px rgba(0,0,0,.12); min-width: 160px; z-index: 3; }
+.tiph { color: var(--text2); margin-bottom: 3px; }
+.tipr { display: grid; grid-template-columns: 18px 1fr auto; gap: 6px; align-items: center; }
+.tipr b { font-variant-numeric: tabular-nums; }
+.bars { display: grid; gap: 7px; margin-top: 10px; }
+.bar { display: grid; grid-template-columns: minmax(150px, 330px) 1fr 44px; gap: 10px; align-items: center; }
+.bl { color: var(--text2); font-size: 13px; }
+.bt { background: var(--grid); border-radius: 4px; height: 14px; overflow: hidden; }
+.bf { display: block; height: 100%; border-radius: 0 4px 4px 0; }
+.bar b { text-align: right; font-variant-numeric: tabular-nums; }
+@media (max-width: 520px) { .bar { grid-template-columns: 1fr 44px; } .bt { grid-column: 1 / -1; grid-row: 2; } }
+.tablewrap { overflow-x: auto; margin: 8px 0; }
+table { border-collapse: collapse; font-size: 13px; width: 100%; }
+th, td { text-align: left; padding: 5px 9px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--text2); font-weight: 600; white-space: nowrap; }
+td { font-variant-numeric: tabular-nums; }
+table.gridin input { width: 100%; min-width: 120px; padding: 5px 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; }
+.row { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; margin: 10px 0; }
+.row input[type=number] { width: 80px; padding: 5px 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; }
+.row select, select.inline { padding: 5px 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; max-width: 100%; }
+.pickrow { margin-top: 12px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 4px 16px 6px; margin: 12px 0; }
+.cols3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0 22px; }
+.doc { max-width: 900px; }
+.doc h2 { margin-top: 30px; }
+.doc table { width: auto; }
+.doc .eq { overflow-x: auto; }
+.empty { color: var(--text2); padding: 30px 0; }
+.field input[type=text] { width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--text); font: inherit; }
+section.setup, #results > section { margin-top: 28px; }
+#results h2 { font-size: 19px; margin: 0 0 4px; }
+svg .isolab { fill: #fff; font-size: 11px; paint-order: stroke; stroke: rgba(0,0,0,.35); stroke-width: 2px; }
+svg .maplab { fill: var(--text); font-size: 12.5px; font-weight: 600; paint-order: stroke; stroke: var(--surface); stroke-width: 3px; }
+.mapgrid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.mapwrap { max-width: 640px; }
+.mapwrap { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+.scale { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text2); flex-wrap: wrap; margin-top: 6px; }
+.ramp { display: inline-block; width: 160px; height: 10px; border-radius: 3px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Human-in-the-loop simulator</h1>
+  <nav class="tabs">
+    <button data-tab="results">Results</button>
+    <button data-tab="world">World Features Parameters</button>
+    <button data-tab="formulation">Formulation</button>
+  </nav>
+</header>
+<div class="layout">
+  <aside>
+    <button id="go" class="primary">Run simulation</button>
+    <div class="note">World settings are on the <b>World Features Parameters</b> tab. Hover ⓘ for the allowed range.</div>
+    <div id="params"></div>
+  </aside>
+  <main>
+    <section class="tab" id="tab-results">
+      <div id="status" class="status"></div>
+      <div id="stale" class="stale" hidden>Settings changed since these results; press <b>Run simulation</b> to update.</div>
+      <div id="results"><p class="empty">Set parameters on the left and press <b>Run simulation</b>. Every listed value of η, r and k is run for both setups (with the defaults: 126 runs, under a minute).</p></div>
+    </section>
+    <section class="tab" id="tab-world" hidden><div id="world"></div></section>
+    <section class="tab doc" id="tab-formulation" hidden>
+<h1>Formulation: two interfaces, one human model</h1>
+<p id="mathnote" class="warn" hidden>Formulas need an internet connection to display (they use the KaTeX library); without it they show as raw TeX. The simulator itself works offline.</p>
+<p>Setup A and Setup B share the same underlying human decision-making model. They differ in how alternatives are generated and presented, not in how the human evaluates them or makes mistakes. Otherwise, if the two setups used different error mechanisms, we could not tell whether their different convergence comes from decision complexity, from the available alternatives, or from the human-error assumptions.</p>
+
+<h2>1. World and features</h2>
+<p>Each month $t$, cargoes must be assigned to feasible ships; $X_t$ is the set of feasible assignments. The planner's true objective is linear in known, possibly nonlinear, features of the assignment:</p>
+<div class="eq">$$F_t^\star(x)=c^{\star\top}\phi_t(x),\qquad x_t^\star=\arg\min_{x\in X_t}F_t^\star(x).$$</div>
+<p>$\phi_t(x)$ adds up features of the individual cargo–ship matches in $x$, so every objective stays a sum over the chosen matches.</p>
+<details class="box" id="featweights">
+<summary>The features built in this simulator (show / hide)</summary>
+<p><b>Familiar features</b> (in this order): waiting days, sailing cost, lateness, empty-trip distance, spare capacity, destination match, preferred operator, unwanted region pair. Their true weights: a fixed sign × a random size between $\underline w$ and $\bar w$, scaled to the cost unit.</p>
+<p><b>Nonlinear features</b> (each built per cargo–ship match from attributes the machine sees, then added up over the assignment):</p>
+<table>
+<thead><tr><th>Feature</th><th>Formula</th><th>Built from</th><th>True weight</th></tr></thead>
+<tbody>
+<tr><td>Urgent cargo waiting too long</td><td>$\sum_{i,j}\text{urgent}_i\,\max(0,\,\text{waiting}_{ij}-\tau_w)\,x_{ij}$</td><td>urgent flag, waiting days</td><td data-w="urgent_waiting_beyond"></td></tr>
+<tr><td>Long empty trips</td><td>$\sum_{i,j}\max(0,\,\text{ballast}_{ij}-\delta_b)^2\,x_{ij}$</td><td>empty-trip distance (1000 nm)</td><td data-w="long_ballast"></td></tr>
+<tr><td>Special cargo on a basic ship</td><td>$\sum_{i,j}\mathbf{1}\{\text{special } i\}\,\mathbf{1}\{\text{basic } j\}\,x_{ij}$</td><td>special-cargo flag, basic-service flag</td><td data-w="special_on_basic"></td></tr>
+</tbody>
+</table>
+<p><b>A plausible but wrong feature.</b> Special cargo on a ship whose next region is not its destination: $\sum_{i,j}\mathbf{1}\{\text{special } i\}\,(1-\text{destination match}_{ij})\,x_{ij}$. Its true weight is 0; the machine starts with weight $P_0$ = <span data-v="proxy0"></span> on it. For special cargo, close ships tend to have destination match and premium service together; distant ships less so.</p>
+<p>Thresholds $\tau_w$, $\delta_b$ and the true weights are set on the World Features Parameters tab. Cost unit: 1 = the cost change of one typical small reassignment on the familiar features.</p>
+</details>
+
+<h2>2. One process, two ways of building the decision set</h2>
+<div class="eq">$$\boxed{\widehat c_t\;\longrightarrow\;S_t(h)\;\longrightarrow\;\text{human comparisons}\;\longrightarrow\;x_t^H\;\longrightarrow\;\widehat c_{t+1}}$$</div>
+<p>$S_t(h)$ is the set of alternatives the human actually evaluates, and $h$ is the complexity the interface allows. The machine's plan is always in it:</p>
+<div class="eq">$$q_t=\arg\min_{x\in X_t}\widehat c_t^{\top}\phi_t(x).$$</div>
+<table>
+<thead><tr><th></th><th>Setup A: Modify</th><th>Setup B: Choose</th></tr></thead>
+<tbody>
+<tr><td>Machine output</td><td>One optimal plan $q_t$</td><td>$q_t$ plus $k-1$ alternatives</td></tr>
+<tr><td>Candidate generation</td><td>The human explores feasible edits within radius $r$</td><td>The machine samples near-optimal alternatives</td></tr>
+<tr><td>Human evaluation</td><td colspan="2">Same comparison mechanism</td></tr>
+<tr><td>Human error</td><td colspan="2">Same assumptions and parameters</td></tr>
+<tr><td>Human output</td><td>One final assignment $x_t^H$</td><td>One selected assignment $x_t^H$</td></tr>
+<tr><td>Learning</td><td colspan="2">Same update</td></tr>
+</tbody>
+</table>
+<p>The critical distinction is between candidate <i>generation</i> and candidate <i>evaluation</i>. In Setup A the human generates the modifications; in Setup B the machine generates the alternatives and the human only compares them. That may change how much preference information the human can reveal, even when evaluation accuracy is identical.</p>
+
+<h3>Setup A: modify</h3>
+<p>The radius-restricted feasible set $\mathcal B_t(q_t,r)=\{x\in X_t:D(x,q_t)\le r\}$, with $D$ the number of cargoes assigned differently, is not the set the human examines. The human examines</p>
+<div class="eq">$$S_t^A(r)\subseteq\mathcal B_t(q_t,r),$$</div>
+<p>the plans visited by a feasible local-search process starting at $q_t$. In the simulator each edit moves one cargo to an idle allowed ship or swaps two cargoes, is drawn at random without using the true weights, and must stay within radius $r$ of $q_t$. The human visits up to $m_A-1$ edits:</p>
+<ul>
+<li>Sequential procedure: each edit is made to the current incumbent and compared with it (local search).</li>
+<li>Tournament procedure: each edit is a random walk of 1 to $r$ moves from $q_t$; then one bracket.</li>
+</ul>
+<p>The truly best plan within the radius, $\min_{x\in\mathcal B_t(q_t,r)}F_t^\star(x)$, is computed exactly but only as a diagnostic.</p>
+
+<h3>Setup B: choose</h3>
+<p>The machine's near-optimal region is</p>
+<div class="eq">$$\boxed{\mathcal N_t(\varepsilon)=\left\{x\in X_t:\widehat F_t(x)\le\widehat F_t(q_t)+\varepsilon\right\}.}$$</div>
+<p>The simulator lists every plan in $\mathcal N_t(\varepsilon)$ in one ranked enumeration (capped at $K_{\max}$ plans; if the region is larger, it keeps the $K_{\max}$ best). It then draws $k-1$ of them uniformly at random without replacement:</p>
+<div class="eq">$$S_t^B(k)=\{q_t,q_t^2,\ldots,q_t^k\}.$$</div>
+<p>Menus are nested: one random order per month is used for every $k$, so a larger menu adds plans and keeps the earlier ones. Hence, at a fixed model state, the best available plan cannot get worse as $k$ grows; only the human's ability to pick it can.</p>
+<p>Uniform sampling matters. Taking the $k$ best plans may return near-copies of $q_t$ and never expose, say, the special-cargo preference. A uniform draw from the whole region has a chance of including a plan that is informative about a weight the machine set to zero.</p>
+
+<h2>3. One human comparison model</h2>
+<p>One primitive operation:</p>
+<div class="eq">$$\boxed{\mathcal H_\eta(x,y)=\text{the human's chosen plan when comparing }x\text{ and }y.}$$</div>
+<p>The human tries to select $\arg\min_{z\in\{x,y\}}F_t^\star(z)$, but the comparison can be wrong:</p>
+<div class="eq">$$\Pr\bigl(\mathcal H_\eta(x,y)\ne\arg\min_{z\in\{x,y\}}F_t^\star(z)\mid\text{history}\bigr)\le\eta.$$</div>
+<p>The simulator uses independent errors with probability exactly $\eta$ (equally good plans: either one). The same oracle and the same procedure (sequential incumbent or balanced tournament, $|S|-1$ comparisons either way) evaluate the set in both setups:</p>
+<div class="eq">$$\boxed{x_t^H=\mathcal H_\eta\bigl(S_t(h);c^\star\bigr),\qquad z_t(h)=\arg\min_{x\in S_t(h)}F_t^\star(x).}$$</div>
+<ul>
+<li>In Setup A, $r$ affects which modifications are encountered, how different they are, and how many comparisons the human makes.</li>
+<li>In Setup B, $k$ directly sets how many alternatives are compared.</li>
+<li>In both, the same oracle decides whether the human errs. Human error depends on the comparison task, not on which interface produced it.</li>
+</ul>
+<p><b>Random-choice control:</b> $\eta=0.5$ (coin-flip comparisons). Any improvement it shows is not learning from the human.</p>
+<p><b>Extension (not yet implemented):</b> a constant $\eta$ says that comparing two very different plans is no harder than comparing two nearly identical ones. A common difficulty-dependent bound would be $\Pr(\text{error}\mid x,y)\le\eta\bigl(D_t(x,y)/n_t,\;|F_t^\star(x)-F_t^\star(y)|\bigr)$, which also applies to both interfaces.</p>
+
+<h2>4. The machine</h2>
+<p>The machine's objective uses the same 12 features with wrong weights: $\widehat F_t(x)=\widehat c_t^{\top}\phi_t(x)$. At the start, the first $d$ of the 11 true features have wrong weights, the other $11-d$ have weight 0, and the wrong feature has $P_0$. The wrong weights are the true ones turned away in a fixed random direction until the starting plan's regret equals $R_0$. Every run of a replicate starts from exactly the same $\widehat c_0$, whatever the setup, $h$ or $\eta$, and uses the same random numbers.</p>
+<p>The same update is used in both setups. It is a structured margin loss that asks the human's plan to beat every feasible plan:</p>
+<div class="eq">$$\mathcal L_t(\widehat c)=\max_{x\in X_t}\Bigl[\widehat c^{\top}\phi_t(x_t^H)-\widehat c^{\top}\phi_t(x)+\mu\,D(x_t^H,x)\Bigr].$$</div>
+<p>It is minimized over all months so far by $E$ passes of Adam, with the weights rescaled after each step to the truth's cost spread (rescaling changes no decision). When the hardest competitor is $q_t$, the step is along</p>
+<div class="eq">$$g_t=\phi_t(x_t^H)-\phi_t(q_t).$$</div>
+
+<h2>5. The common learning relationship</h2>
+<p>Because $q_t$ is optimal under $\widehat c_t$, we have $\widehat c_t^{\top}g_t\ge0$, so for every response, correct or not:</p>
+<div class="eq">$$\boxed{\mathbb E\bigl[(\widehat c_t-c^\star)^{\top}g_t\bigr]\ge\underbrace{F_t^\star(q_t)-F_t^\star(z_t(h))}_{V_t(h):\ \text{potential improvement}}-\underbrace{\mathbb E\bigl[F_t^\star(x_t^H)-F_t^\star(z_t(h))\bigr]}_{\beta_t(h):\ \text{response error}}.}$$</div>
+<p>This needs no knowledge of whether $h=r$ or $h=k$. The interface matters only through the distribution of $S_t(h)$, which determines the potential improvement, the feature differences available, and the comparison difficulty.</p>
+<p><b>Diversity in feature space.</b> Two assignments can differ in many cargoes yet be nearly identical in features, and one special cargo moved from a basic to a premium ship can be highly informative. With $v_t(x)=\phi_t(x)-\phi_t(q_t)$, the simulator reports how many preference directions a set exposes:</p>
+<div class="eq">$$M_t(S_t)=\sum_{x\in S_t}v_t(x)v_t(x)^{\top},\qquad \text{directions exposed}=\frac{(\operatorname{tr}M_t)^2}{\|M_t\|_F^2}.$$</div>
+<p>This describes the candidates, not the information the learner receives: it observes only the winner. Useful information combines the preference differences exposed with the reliability of the human's choices. A large, diverse menu with mostly wrong comparisons can be less useful than a smaller, reliable one.</p>
+
+<h2>6. What the simulator records</h2>
+<table>
+<thead><tr><th>Measure</th><th>What it captures</th></tr></thead>
+<tbody>
+<tr><td>Plans actually considered</td><td>Human workload</td></tr>
+<tr><td>Comparisons performed</td><td>Decision-making effort</td></tr>
+<tr><td>Distance between compared plans</td><td>Structural complexity</td></tr>
+<tr><td>True gap between compared plans</td><td>Difficulty of telling them apart</td></tr>
+<tr><td>Preference directions exposed</td><td>Potential preference information</td></tr>
+<tr><td>Potential improvement $V$ and response error $\beta$</td><td>Feedback quality</td></tr>
+<tr><td>Update alignment $(\widehat c_t-c^\star)^{\top}g_t$</td><td>Whether each update moves toward the truth</td></tr>
+<tr><td>Held-out regret over months</td><td>Learning speed</td></tr>
+</tbody>
+</table>
+<p>$r$ and $k$ are not comparable measures of complexity, so the two setups are compared through these common measures. With $m_A=k$, both interfaces have the human evaluate the same number of plans with $m-1$ comparisons, under an identical decision mechanism; only the distribution of alternatives differs.</p>
+<p><b>Research question.</b> Given a common boundedly rational human decision model, how do the mechanism and complexity of alternative generation determine the information content of human feedback and the convergence of an inverse-optimization learner?</p>
+
+    </section>
+  </main>
+</div>
+<script id="core">
+"use strict";
+/* Simulation core (runs in the page or in background workers).
+   Every month t:  c_t  ->  S_t(h)  ->  human comparisons  ->  x_t^H  ->  c_{t+1}.
+   Setup A (modify): the human explores random feasible edits of the machine's plan q_t within radius r.
+   Setup B (choose): the machine shows q_t plus k-1 plans drawn uniformly from its eps-near-optimal region.
+   Both use the same human comparison oracle (error rate eta) and the same learner update. */
+
+// ---------- random numbers (seeded; the same seeds give the same world in every browser) ----------
+function mix32(h) {
+  h ^= h >>> 16; h = Math.imul(h, 0x85ebca6b); h ^= h >>> 13; h = Math.imul(h, 0xc2b2ae35); h ^= h >>> 16;
+  return h >>> 0;
+}
+function seedOf(arr) {
+  let h = 0x9e3779b9 ^ arr.length;
+  for (const v of arr) h = mix32((h + Math.imul((v | 0) + 0x7f4a7c15, 0x2545f491)) | 0);
+  return h;
+}
+function RNG(...seeds) {
+  let s = seedOf(seeds), spare = null;
+  const next = () => {                                     // mulberry32
+    s = (s + 0x6d2b79f5) | 0; let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  return {
+    random: next,
+    uniform: (a, b) => a + (b - a) * next(),
+    int: (k) => Math.floor(next() * k),
+    normal() {
+      if (spare !== null) { const v = spare; spare = null; return v; }
+      let u, v, r;
+      do { u = 2 * next() - 1; v = 2 * next() - 1; r = u * u + v * v; } while (r >= 1 || r === 0);
+      const f = Math.sqrt(-2 * Math.log(r) / r); spare = v * f; return u * f;
+    },
+    exponential: (scale) => -scale * Math.log(1 - next()),
+    permutation(k) {
+      const p = Array.from({ length: k }, (_, i) => i);
+      for (let i = k - 1; i > 0; i--) { const j = Math.floor(next() * (i + 1)); const x = p[i]; p[i] = p[j]; p[j] = x; }
+      return p;
+    },
+  };
+}
+
+// ---------- features ----------
+// name, readable name, meaning, natural unit of the weight
+const FEAT = [
+  ["waiting", "waiting days", "days the ship waits at the load port before the loading window opens", "per day"],
+  ["sailing_cost", "sailing cost", "cost of sailing to the cargo (days at sea × the ship's daily cost)", "per cost unit"],
+  ["lateness", "lateness", "days the ship arrives after the loading window closes", "per day"],
+  ["ballast_distance", "empty-trip distance", "empty distance the ship sails to reach the cargo (1000 nm)", "per 1000 nm"],
+  ["spare_capacity", "spare capacity", "share of the ship's capacity left unused by this cargo", "per unit share"],
+  ["destination_match", "destination match", "the ship's next trading region is the cargo's destination (1/0)", "per cargo"],
+  ["preferred_service", "preferred operator", "the cargo's customer prefers this ship's operator (1/0)", "per cargo"],
+  ["undesirable_pair", "unwanted region pair", "the load region and the ship's current region are an unwanted pairing (1/0)", "per cargo"],
+  ["urgent_waiting_beyond", "urgent waiting beyond τ_w", "an urgent cargo's waiting days beyond τ_w: urgent × max(0, waiting − τ_w)", "per extra day"],
+  ["long_ballast", "long empty trips", "max(0, empty-trip distance − δ_b)², in (1000 nm)²", "per (1000 nm)²"],
+  ["special_on_basic", "special cargo on a basic ship", "special cargo on a basic-service ship (1/0): the true reason", "per cargo"],
+  ["special_dest_mismatch", "special cargo on a ship going elsewhere", "special cargo on a ship whose next region is not its destination (1/0): the wrong reason, true weight 0", "per cargo"],
+];
+const NF = FEAT.length;                 // 12 features; the learner has a linear weight on every one
+const NT = 11;                          // the first 11 are the true terms; feature 11 (the wrong reason) has true weight 0
+const FAMILIAR = [0, 1, 2, 3, 4, 5, 6, 7], NONLIN = [8, 9, 10], IUW = 8, ILB = 9, IG2 = 10, IP = 11;
+const SIGN = [1, 1, 1, 1, 1, -1, -1, 1];  // costs +, good matches −
+
+// ---------- assignment ----------
+// A month: n cargoes × m ships, allowed[i*m+j]; a plan a[i] = ship of cargo i (each ship at most once).
+function lsa(C, allowed, n, m) {
+  let big = 1;
+  for (let e = 0; e < n * m; e++) if (allowed[e]) big = Math.max(big, Math.abs(C[e]));
+  big = (2 * big + 1) * (n + 2);
+  const u = new Float64Array(n + 1), v = new Float64Array(m + 1), p = new Int32Array(m + 1), way = new Int32Array(m + 1);
+  const minv = new Float64Array(m + 1), used = new Uint8Array(m + 1);
+  for (let i = 1; i <= n; i++) {
+    p[0] = i; let j0 = 0; minv.fill(Infinity); used.fill(0);
+    do {
+      used[j0] = 1; const i0 = p[j0], row = (i0 - 1) * m; let delta = Infinity, j1 = 0;
+      for (let j = 1; j <= m; j++) if (!used[j]) {
+        const cur = (allowed[row + j - 1] ? C[row + j - 1] : big) - u[i0] - v[j];
+        if (cur < minv[j]) { minv[j] = cur; way[j] = j0; }
+        if (minv[j] < delta) { delta = minv[j]; j1 = j; }
+      }
+      for (let j = 0; j <= m; j++) { if (used[j]) { u[p[j]] += delta; v[j] -= delta; } else minv[j] -= delta; }
+      j0 = j1;
+    } while (p[j0] !== 0);
+    do { const j1 = way[j0]; p[j0] = p[j1]; j0 = j1; } while (j0);
+  }
+  const a = new Int32Array(n);
+  for (let j = 1; j <= m; j++) if (p[j]) a[p[j] - 1] = j - 1;
+  for (let i = 0; i < n; i++) if (!allowed[i * m + a[i]]) return null;
+  return a;
+}
+function cost(C, a, m) { let s = 0; for (let i = 0; i < a.length; i++) s += C[i * m + a[i]]; return s; }
+function same(a, b) { for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false; return true; }
+function ndiff(a, b) { let k = 0; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) k++; return k; }
+
+function constrained(C, allowed, n, m, inc, exc) {
+  const A = allowed.slice();
+  for (const [i, j] of exc) A[i * m + j] = 0;
+  for (const [i, j] of inc) { for (let k = 0; k < m; k++) A[i * m + k] = 0; for (let k = 0; k < n; k++) A[k * m + j] = 0; A[i * m + j] = 1; }
+  return lsa(C, A, n, m);
+}
+
+class Heap {
+  constructor(less) { this.h = []; this.less = less; }
+  get size() { return this.h.length; }
+  push(x) {
+    const h = this.h; h.push(x); let i = h.length - 1;
+    while (i > 0) { const p = (i - 1) >> 1; if (!this.less(h[i], h[p])) break; [h[i], h[p]] = [h[p], h[i]]; i = p; }
+  }
+  pop() {
+    const h = this.h, top = h[0], last = h.pop();
+    if (h.length) {
+      h[0] = last; let i = 0;
+      for (;;) {
+        const l = 2 * i + 1, r = l + 1; let s = i;
+        if (l < h.length && this.less(h[l], h[s])) s = l;
+        if (r < h.length && this.less(h[r], h[s])) s = r;
+        if (s === i) break; [h[i], h[s]] = [h[s], h[i]]; i = s;
+      }
+    }
+    return top;
+  }
+}
+
+// Plans in increasing cost (Murty's ranking). visit(a, c) is called for each plan whose cost is <= the current limit
+// and returns the new limit (it may shrink). Stops after maxCount plans (capped = true).
+function ranked(C, allowed, n, m, limit, maxCount, visit) {
+  const a0 = lsa(C, allowed, n, m);
+  if (!a0) return { count: 0, capped: false };
+  const heap = new Heap((x, y) => x.c < y.c || (x.c === y.c && x.tick < y.tick));
+  heap.push({ c: cost(C, a0, m), tick: 0, a: a0, inc: [], exc: [] }); let tick = 1, count = 0;
+  while (heap.size) {
+    const nd = heap.pop();
+    if (nd.c > limit) break;
+    if (count >= maxCount) return { count, capped: true };
+    count++; limit = visit(nd.a, nd.c);
+    const fixed = new Set(nd.inc.map((e) => e[0])), cur = nd.inc.slice();
+    for (let i = 0; i < n; i++) {
+      if (fixed.has(i)) continue;
+      const e = [i, nd.a[i]], exc = nd.exc.concat([e]);
+      const b = constrained(C, allowed, n, m, cur, exc);
+      if (b) { const cb = cost(C, b, m); if (cb <= limit) heap.push({ c: cb, tick: tick++, a: b, inc: cur.slice(), exc }); }
+      cur.push(e);
+    }
+  }
+  return { count, capped: false };
+}
+
+function nearBest(C, allowed, n, m, eps, kmax) {
+  const plans = [], costs = []; let lim = Infinity;
+  const r = ranked(C, allowed, n, m, Infinity, kmax, (a, c) => {
+    if (!plans.length) lim = c + eps + 1e-12;
+    plans.push(a); costs.push(c); return lim;
+  });
+  return { plans, costs, capped: r.capped };
+}
+
+function priority(seed, t, a) {             // fixed pseudo-random priority of a plan (same plan → same number)
+  let h = seedOf([seed, t, 0x51ed]);
+  for (let i = 0; i < a.length; i++) h = mix32((h ^ (a[i] + 1) * 0x9e3779b1) + i);
+  return h / 4294967296;
+}
+
+// ---------- world ----------
+function nShips(cfg) { return cfg.slack >= 0 ? cfg.n_cargo + cfg.slack : cfg.n_ship; }
+
+// raw features of one month (before thresholds and scaling): 12 per pair + the ingredients of the nonlinear ones
+function rawMonth(cfg, fixed, seeds) {
+  const rng = RNG(...seeds), n = cfg.n_cargo, m = nShips(cfg), [pref, bad] = fixed;
+  const ox = [], oy = [], dest = [], size = [], urg = [], L = [], cust = [], spec = [];
+  for (let i = 0; i < n; i++) {
+    ox.push(rng.random()); oy.push(rng.random()); dest.push(rng.int(4)); size.push(rng.uniform(20, 80));
+    urg.push(rng.random() < 0.2 ? 1 : 0); L.push(rng.uniform(0, 30)); cust.push(rng.int(5));
+    spec.push(rng.random() < cfg.special_share ? 1 : 0);
+  }
+  const px = [], py = [], ready = [], slow = [], cap = [], nreg = [], op = [], basic = [];
+  for (let j = 0; j < m; j++) {
+    px.push(rng.random()); py.push(rng.random()); ready.push(rng.uniform(-5, 25)); slow.push(rng.random() < 0.4 ? 1 : 0);
+    cap.push(rng.uniform(30, 100)); nreg.push(rng.int(4)); op.push(rng.int(5)); basic.push(rng.random() < 0.5 ? 1 : 0);
+  }
+  const plant = rng.permutation(m);
+  for (let i = 0; i < n; i++) cap[plant[i]] = Math.max(cap[plant[i]], size[i] + 1);
+  const allowed = new Uint8Array(n * m);
+  if (cfg.elig_max > 0) {                                // sparse eligibility: e_min..e_max ships per cargo
+    for (let i = 0; i < n; i++) {
+      const ok = []; for (let j = 0; j < m; j++) if (cap[j] >= size[i] && j !== plant[i]) ok.push(j);
+      const lo = Math.max(cfg.elig_min, 1), k = Math.min(ok.length, lo + rng.int(cfg.elig_max - lo + 1) - 1);
+      const perm = rng.permutation(ok.length);
+      for (let q = 0; q < Math.max(k, 0); q++) allowed[i * m + ok[perm[q]]] = 1;
+    }
+  } else {
+    for (let i = 0; i < n; i++) for (let j = 0; j < m; j++) allowed[i * m + j] = (cap[j] >= size[i] && rng.random() < cfg.density) ? 1 : 0;
+  }
+  for (let i = 0; i < n; i++) allowed[i * m + plant[i]] = 1;
+  const reg = (x, y) => (x > 0.5 ? 2 : 0) + (y > 0.5 ? 1 : 0);
+  const R = 11, raw = new Float64Array(n * m * R);     // waiting, sailing cost, lateness, ballast, spare, dest match, pref, bad, urgent, special, basic
+  for (let i = 0; i < n; i++) {
+    const dist = [];
+    for (let j = 0; j < m; j++) dist.push(Math.hypot(ox[i] - px[j], oy[i] - py[j]));
+    let rank = null;
+    if (spec[i]) { const ord = dist.map((d, j) => j).sort((a, b) => dist[a] - dist[b]); rank = new Float64Array(m); ord.forEach((j, r) => { rank[j] = r / Math.max(m - 1, 1); }); }
+    for (let j = 0; j < m; j++) {
+      const dcost = 0.5 + cap[j] / 100, sail = dist[j] * 3000 / ((slow[j] ? 12 : 15) * 24), arr = ready[j] + sail;
+      let dm = nreg[j] === dest[i] ? 1 : 0;
+      if (spec[i]) {                                     // special cargo: destination fit vs service class
+        const al = rng.random() < cfg.align_near + (cfg.align_far - cfg.align_near) * rank[j];
+        dm = al ? 1 - basic[j] : basic[j];
+      }
+      const o = (i * m + j) * R;
+      raw[o] = Math.max(0, L[i] - arr); raw[o + 1] = sail * dcost; raw[o + 2] = Math.max(0, arr - L[i] - 5); raw[o + 3] = dist[j] * 3;
+      raw[o + 4] = (cap[j] - size[i]) / cap[j]; raw[o + 5] = dm; raw[o + 6] = pref[cust[i]][op[j]];
+      raw[o + 7] = bad[reg(ox[i], oy[i])][reg(px[j], py[j])]; raw[o + 8] = urg[i]; raw[o + 9] = spec[i]; raw[o + 10] = basic[j];
+    }
+  }
+  return { n, m, allowed, raw };
+}
+
+function features(mo, tau, delta) {           // the 12 features of every pair (natural units)
+  const { n, m, raw } = mo, X = new Float64Array(n * m * NF);
+  for (let e = 0; e < n * m; e++) {
+    const r = e * 11, o = e * NF;
+    for (let k = 0; k < 8; k++) X[o + k] = raw[r + k];
+    X[o + IUW] = raw[r + 8] * Math.max(0, raw[r] - tau);
+    X[o + ILB] = Math.max(0, raw[r + 3] - delta) ** 2;
+    X[o + IG2] = raw[r + 9] * raw[r + 10];
+    X[o + IP] = raw[r + 9] * (1 - raw[r + 5]);
+  }
+  return X;
+}
+
+function edgeCosts(X, w, n, m) {
+  const C = new Float64Array(n * m);
+  for (let e = 0; e < n * m; e++) { let s = 0; const o = e * NF; for (let k = 0; k < NF; k++) s += X[o + k] * w[k]; C[e] = s; }
+  return C;
+}
+function planFeat(X, a, m) {                   // the plan's total on every feature
+  const f = new Float64Array(NF);
+  for (let i = 0; i < a.length; i++) { const o = (i * m + a[i]) * NF; for (let k = 0; k < NF; k++) f[k] += X[o + k]; }
+  return f;
+}
+function spread(f, g) {                        // RMS of pair costs after removing each cargo's own mean
+  const s = new Map(), c = new Map();
+  for (let e = 0; e < f.length; e++) { s.set(g[e], (s.get(g[e]) || 0) + f[e]); c.set(g[e], (c.get(g[e]) || 0) + 1); }
+  let t = 0; for (let e = 0; e < f.length; e++) { const d = f[e] - s.get(g[e]) / c.get(g[e]); t += d * d; }
+  return Math.sqrt(t / f.length);
+}
+const dot = (a, b) => { let s = 0; for (let k = 0; k < a.length; k++) s += a[k] * b[k]; return s; };
+function quad(S, u, v) { let s = 0; for (let i = 0; i < u.length; i++) for (let j = 0; j < v.length; j++) s += u[i] * S[i][j] * v[j]; return s; }
+
+const BASE_SKIP = ["urgent_wait_weight", "ballast_weight", "trap_penalty", "w_low", "w_high"];
+function makeBase(cfg) {
+  const n = cfg.n_cargo, m = nShips(cfg);
+  if (n > m) throw new Error("need at least as many ships as cargoes (n ≤ m)");
+  const rng = RNG(cfg.seed, 1);
+  const pref = Array.from({ length: 5 }, () => Array.from({ length: 5 }, () => (rng.random() < 0.3 ? 1 : 0)));
+  const bad = Array.from({ length: 4 }, () => Array.from({ length: 4 }, () => (rng.random() < 0.15 ? 1 : 0)));
+  const u01 = Array.from({ length: 8 }, () => rng.random());        // familiar weights = sign × (w_low + (w_high − w_low) u)
+  const mk = (kind, k) => { const r = rawMonth(cfg, [pref, bad], [cfg.seed, kind, k]); r.X = features(r, cfg.wait_threshold, cfg.ballast_threshold); r.id = [kind, k]; delete r.raw; return r; };
+  const ref = []; for (let k = 0; k < cfg.n_ref; k++) ref.push(mk(0, k));
+  // scales: every feature standardized over the measuring months' allowed pairs (the two 0/1 special-cargo features kept 0/1)
+  const mu = new Float64Array(NF), sd = new Float64Array(NF); let cnt = 0;
+  for (const r of ref) for (let e = 0; e < n * m; e++) if (r.allowed[e]) { cnt++; for (let k = 0; k < NF; k++) mu[k] += r.X[e * NF + k]; }
+  for (let k = 0; k < NF; k++) mu[k] /= cnt;
+  for (const r of ref) for (let e = 0; e < n * m; e++) if (r.allowed[e]) for (let k = 0; k < NF; k++) sd[k] += (r.X[e * NF + k] - mu[k]) ** 2;
+  for (let k = 0; k < NF; k++) { sd[k] = Math.sqrt(sd[k] / cnt); if (sd[k] < 1e-9) sd[k] = 1; }
+  mu[IG2] = 0; sd[IG2] = 1; mu[IP] = 0; sd[IP] = 1;
+  const stdz = (r) => { for (let e = 0; e < n * m; e++) for (let k = 0; k < NF; k++) r.X[e * NF + k] = (r.X[e * NF + k] - mu[k]) / sd[k]; return r; };
+  ref.forEach(stdz);
+  // the ruler: feature changes of random small reassignments (one cargo to an idle ship, or a swap)
+  const mrng = RNG(cfg.seed, 2), D = [];
+  for (const r of ref) {
+    const rc = new Float64Array(n * m); for (let e = 0; e < n * m; e++) rc[e] = mrng.random();
+    const a = lsa(rc, r.allowed, n, m), owner = new Int32Array(m).fill(-1); a.forEach((j, i) => { owner[j] = i; });
+    const opts = []; for (let i = 0; i < n; i++) { const o = []; for (let j = 0; j < m; j++) if (r.allowed[i * m + j] && j !== a[i]) o.push(j); opts.push(o); }
+    let got = 0, tries = 0;
+    while (got < cfg.n_moves && tries < 50 * cfg.n_moves) {
+      tries++; const i = mrng.int(n); if (!opts[i].length) continue;
+      const j = opts[i][mrng.int(opts[i].length)], k = owner[j];
+      const mv = k < 0 ? [[i, a[i], j]] : r.allowed[k * m + a[i]] ? [[i, a[i], j], [k, j, a[i]]] : null;
+      if (!mv) continue;
+      const d = new Float64Array(NF);
+      for (const [c, old, nw] of mv) for (let f = 0; f < NF; f++) d[f] += r.X[(c * m + nw) * NF + f] - r.X[(c * m + old) * NF + f];
+      D.push(d); got++;
+    }
+  }
+  const S = Array.from({ length: NF }, () => new Float64Array(NF));
+  for (const d of D) for (let i = 0; i < NF; i++) for (let j = 0; j < NF; j++) S[i][j] += d[i] * d[j] / D.length;
+  // a sample of real pairs (cargo groups) to keep every model at the truth's cost spread
+  const Xe = [], ge = []; let gid = 0;
+  for (const r of ref) {
+    for (let i = 0; i < n; i++) { for (let j = 0; j < m; j++) if (r.allowed[i * m + j]) { Xe.push(r.X.subarray((i * m + j) * NF, (i * m + j + 1) * NF)); ge.push(gid); } gid++; }
+    if (ge.length > 4000) break;
+  }
+  const train = []; for (let k = 0; k < cfg.T; k++) train.push(stdz(mk(1, k)));
+  const test = []; for (let k = 0; k < cfg.n_test; k++) test.push(stdz(mk(4, k)));
+  let calib = null;
+  return { cfg, n, m, mu, sd, S, Xe, ge, u01, train, test, calib: () => (calib = calib || Array.from({ length: cfg.n_calib }, (_, k) => stdz(mk(3, k)))) };
+}
+
+function makeWorld(cfg, base) {
+  const { S, sd, n, m } = base, w = new Float64Array(NF);
+  const wb = FAMILIAR.map((k) => SIGN[k] * (cfg.w_low + (cfg.w_high - cfg.w_low) * base.u01[k]));
+  let nb = 0; FAMILIAR.forEach((i) => FAMILIAR.forEach((j) => { nb += wb[i] * S[i][j] * wb[j]; }));
+  FAMILIAR.forEach((k) => { w[k] = wb[k] / Math.sqrt(nb); });       // cost unit: one typical small reassignment moves the familiar part by 1
+  w[IUW] = cfg.urgent_wait_weight * sd[IUW]; w[ILB] = cfg.ballast_weight * sd[ILB]; w[IG2] = cfg.trap_penalty; w[IP] = 0;
+  const wFam = new Float64Array(NF), wNl = new Float64Array(NF);
+  FAMILIAR.forEach((k) => { wFam[k] = w[k]; }); NONLIN.forEach((k) => { wNl[k] = w[k]; });
+  const target = spread(base.Xe.map((x) => dot(x, w)), base.ge);
+  const prep = (r) => {
+    const mo = { n, m, allowed: r.allowed, X: r.X, id: r.id };
+    mo.C = edgeCosts(r.X, w, n, m); mo.astar = lsa(mo.C, r.allowed, n, m);
+    mo.Cfam = edgeCosts(r.X, wFam, n, m); mo.Cnl = edgeCosts(r.X, wNl, n, m);
+    return mo;
+  };
+  const ruler = (v) => Math.sqrt(Math.max(quad(S, v, v), 0));
+  let calib = null;
+  return {
+    cfg, base, n, m, w, target, months: base.train.map(prep), test: base.test.map(prep), calib: () => (calib = calib || base.calib().map(prep)),
+    natural: (v) => Array.from(v, (x, k) => x / sd[k]), ruler,
+    nonlinearShare: ruler(wNl) ** 2 / ruler(w) ** 2,
+  };
+}
+
+const _bases = new Map(), _worlds = new Map();
+function getWorld(cfg) {
+  const key = JSON.stringify(cfg);
+  if (!_worlds.has(key)) {
+    const bc = { ...cfg }; BASE_SKIP.forEach((k) => delete bc[k]); const bk = JSON.stringify(bc);
+    if (!_bases.has(bk)) { if (_bases.size > 4) { _bases.clear(); _worlds.clear(); } _bases.set(bk, makeBase(cfg)); }
+    if (_worlds.size > 8) _worlds.clear();
+    _worlds.set(key, makeWorld(cfg, _bases.get(bk)));
+  }
+  return _worlds.get(key);
+}
+
+// ---------- the learner's starting weights ----------
+// The first d true features: the true weights turned toward a fixed random direction (inside those features, measured
+// by the ruler) until the regret on the calibration months equals R0. The other 11 − d true features start at 0, the
+// wrong reason at P0. Depends only on the world, d, R0, P0 and the run seed, so every model compared in one replicate
+// starts from exactly the same weights.
+function start(W, d, R0, P0, runSeed) {
+  const key = [d, R0, P0, runSeed].join("|"); W._starts = W._starts || new Map();
+  if (W._starts.has(key)) return W._starts.get(key);
+  const K = Array.from({ length: d }, (_, i) => i), months = W.calib(), n = W.n, m = W.m;
+  const Sk = K.map((i) => K.map((j) => W.base.S[i][j])), wk = K.map((k) => W.w[k]);
+  const nk = Math.sqrt(quad(Sk, wk, wk));
+  const full = (cf) => { const c = new Float64Array(NF); K.forEach((k, q) => { c[k] = cf[q] * nk; }); c[IP] = P0; return c; };
+  const reg = (cf) => {
+    const c = full(cf); let s = 0;
+    for (const mo of months) s += cost(mo.C, lsa(edgeCosts(mo.X, c, n, m), mo.allowed, n, m), m) - cost(mo.C, mo.astar, m);
+    return s / months.length / n;
+  };
+  const c = wk.map((x) => x / nk), r0 = reg(c);
+  let out;
+  if (d === 1 || R0 <= r0) out = { c0: full(c), achieved: r0, lowest: r0 };
+  else {
+    const rng = RNG(runSeed, 7), z = K.map(() => rng.normal()), zc = quad(Sk, z, c);
+    let q = z.map((x, i) => x - zc * c[i]); const qn = Math.sqrt(quad(Sk, q, q)); q = q.map((x) => x / qn);
+    const turn = (deg) => c.map((x, i) => Math.cos(deg * Math.PI / 180) * x + Math.sin(deg * Math.PI / 180) * q[i]);
+    const degs = [], rs = []; for (let dg = 0; dg <= 180; dg += 3) { degs.push(dg); rs.push(reg(turn(dg))); }
+    let bi = 0; rs.forEach((r, i) => { if (Math.abs(r - R0) < Math.abs(rs[bi] - R0)) bi = i; });
+    let best = [Math.abs(rs[bi] - R0), degs[bi], rs[bi]];
+    const up = rs.findIndex((r, i) => i < rs.length - 1 && (r - R0) * (rs[i + 1] - R0) <= 0);
+    if (up >= 0) {
+      let lo = degs[up], hi = degs[up + 1], flo = rs[up] - R0;
+      for (let it = 0; it < 10; it++) {
+        const mid = (lo + hi) / 2, fm = reg(turn(mid)) - R0;
+        if (Math.abs(fm) < best[0]) best = [Math.abs(fm), mid, fm + R0];
+        if (fm * flo > 0) { lo = mid; flo = fm; } else hi = mid;
+      }
+    }
+    out = { c0: full(turn(best[1])), achieved: best[2], lowest: r0 };
+  }
+  W._starts.set(key, out); return out;
+}
+
+// ---------- the learner: one linear weight per feature ----------
+class Linear {
+  constructor(c0, W) { this.c = Float64Array.from(c0); this.W = W; this.mA = new Float64Array(NF); this.vA = new Float64Array(NF); this.t = 0; this.rescale(); }
+  costs(mo) { return edgeCosts(mo.X, this.c, mo.n, mo.m); }
+  rescale() {                     // keep the model at the truth's cost spread over real pairs (decisions unchanged)
+    const s = spread(this.W.base.Xe.map((x) => dot(x, this.c)), this.W.base.ge) / this.W.target;
+    if (s > 1e-12) for (let k = 0; k < NF; k++) this.c[k] /= s;
+  }
+  adam(g, lr) {
+    this.t++; const b1 = 0.9, b2 = 0.999;
+    for (let k = 0; k < NF; k++) {
+      this.mA[k] = b1 * this.mA[k] + (1 - b1) * g[k]; this.vA[k] = b2 * this.vA[k] + (1 - b2) * g[k] * g[k];
+      const mh = this.mA[k] / (1 - b1 ** this.t), vh = this.vA[k] / (1 - b2 ** this.t);
+      this.c[k] -= lr * mh / (Math.sqrt(vh) + 1e-8);
+    }
+  }
+  // Structured hinge, refit on every past month: the human's response should beat every feasible plan by margin × (cargoes
+  // assigned differently); when the human chose q among several shown plans, q should also beat each of them.
+  refit(history, lr, epochs, margin, rng) {
+    for (let ep = 0; ep < epochs; ep++) for (const s of rng.permutation(history.length)) {
+      const { mo, q, xh, others } = history[s], { n, m, X } = mo, Cm = this.costs(mo), Ca = Cm.slice();
+      for (let i = 0; i < n; i++) Ca[i * m + xh[i]] += margin;
+      const xt = lsa(Ca, mo.allowed, n, m), g = new Float64Array(NF);
+      const hinge = margin * ndiff(xt, xh) + cost(Cm, xh, m) - cost(Cm, xt, m);
+      const addPair = (better, worse) => { const fb = planFeat(X, better, m), fw = planFeat(X, worse, m); for (let k = 0; k < NF; k++) g[k] += (fb[k] - fw[k]) / n; };
+      if (hinge > 1e-12 && !same(xt, xh)) addPair(xh, xt);
+      for (const y of others) if (margin * ndiff(y, q) + cost(Cm, q, m) - cost(Cm, y, m) > 1e-12) addPair(q, y);
+      this.adam(g, lr); this.rescale();
+    }
+  }
+}
+
+// ---------- the human: one comparison oracle for both setups ----------
+// H_eta(x, y): the human tries to keep the truly better plan and gets it wrong with probability eta (ties: either).
+function compare(mo, x, y, eta, rng, log) {
+  const fx = cost(mo.C, x, mo.m), fy = cost(mo.C, y, mo.m);
+  const better = Math.abs(fx - fy) < 1e-12 ? (rng.random() < 0.5 ? x : y) : fx < fy ? x : y, worse = better === x ? y : x;
+  log.push([ndiff(x, y) / mo.n, Math.abs(fx - fy) / mo.n]);
+  return rng.random() < eta ? worse : better;
+}
+// sequential incumbent: start from the first plan, compare the incumbent with each next plan, keep the winner
+function sequential(mo, S, eta, rng, log) { let inc = S[0]; for (let i = 1; i < S.length; i++) inc = compare(mo, inc, S[i], eta, rng, log); return inc; }
+// balanced tournament: random bracket, winners advance (an odd plan out gets a bye); |S| - 1 comparisons
+function tournament(mo, S, eta, rng, log) {
+  let round = rng.permutation(S.length).map((i) => S[i]);
+  while (round.length > 1) {
+    const next = [];
+    for (let i = 0; i + 1 < round.length; i += 2) next.push(compare(mo, round[i], round[i + 1], eta, rng, log));
+    if (round.length % 2) next.push(round[round.length - 1]);
+    round = next;
+  }
+  return round[0];
+}
+const keyOf = (a) => a.join(",");
+
+// one random feasible edit of plan b (move a cargo to an idle allowed ship, or swap two cargoes), staying within
+// radius r of q (cargoes assigned differently) and not repeating a plan already seen; null if none found
+function randomEdit(mo, b, q, r, rng, seen) {
+  const { n, m, allowed } = mo;
+  for (let tries = 0; tries < 80; tries++) {
+    const i = rng.int(n), opts = [];
+    for (let j = 0; j < m; j++) if (allowed[i * m + j] && j !== b[i]) opts.push(j);
+    if (!opts.length) continue;
+    const j = opts[rng.int(opts.length)], y = Int32Array.from(b), k = b.indexOf(j);
+    if (k < 0) y[i] = j; else if (allowed[k * m + b[i]]) { y[i] = j; y[k] = b[i]; } else continue;
+    if (ndiff(y, q) <= r && !seen.has(keyOf(y))) return y;
+  }
+  return null;
+}
+
+// Setup A: the human explores up to m - 1 edits of q within radius r. Sequential: each edit is made to the current
+// incumbent and compared with it (local search). Tournament: edits are random walks from q, then one bracket.
+function setupA(mo, q, r, mPlans, eta, proc, rng, log) {
+  const S = [q], seen = new Set([keyOf(q)]);
+  if (r <= 0 || mPlans <= 1) return { S, xh: q };
+  if (proc === "sequential") {
+    let inc = q;
+    for (let s = 1; s < mPlans; s++) {
+      const y = randomEdit(mo, inc, q, r, rng, seen); if (!y) break;
+      S.push(y); seen.add(keyOf(y)); inc = compare(mo, inc, y, eta, rng, log);
+    }
+    return { S, xh: inc };
+  }
+  for (let s = 1; s < mPlans; s++) {
+    let y = null;
+    for (let tries = 0; tries < 20 && !y; tries++) {
+      let z = q; const L = 1 + rng.int(r);
+      for (let step = 0; step < L; step++) { const e = randomEdit(mo, z, q, r, rng, new Set([keyOf(z)])); if (e) z = e; }
+      if (!seen.has(keyOf(z))) y = z;
+    }
+    if (!y) break; S.push(y); seen.add(keyOf(y));
+  }
+  return { S, xh: tournament(mo, S, eta, rng, log) };
+}
+
+// Setup B: q plus the first k - 1 plans of a uniformly random order of the eps-near-optimal pool (so menus are nested in k)
+function setupB(mo, pool, order, k, eta, proc, rng, log) {
+  const S = [pool[0], ...order.slice(0, Math.max(0, k - 1)).map((i) => pool[i])];
+  return { S, xh: proc === "sequential" ? sequential(mo, S, eta, rng, log) : tournament(mo, S, eta, rng, log) };
+}
+
+// oracle diagnostic for A: the truly best plan within radius r of q (exact: Lagrange bound + ranking)
+function radiusBest(mo, q, r) {
+  const { n, m, C, allowed } = mo;
+  if (r >= ndiff(q, mo.astar)) return mo.astar;
+  if (r <= 0) return q;
+  const sol = (mu) => { const L = new Float64Array(n * m); for (let i = 0; i < n; i++) for (let j = 0; j < m; j++) L[i * m + j] = C[i * m + j] + (j === q[i] ? 0 : mu); return lsa(L, allowed, n, m); };
+  let hi = 0.5, xh = sol(hi);
+  for (let it = 0; it < 40 && ndiff(xh, q) > r; it++) { hi *= 2; xh = sol(hi); }
+  let lo = 0;
+  for (let it = 0; it < 30; it++) { const mid = (lo + hi) / 2, xm = sol(mid); if (ndiff(xm, q) <= r) { hi = mid; xh = xm; } else lo = mid; }
+  let inc = xh, H = cost(C, xh, m);
+  const L = new Float64Array(n * m); for (let i = 0; i < n; i++) for (let j = 0; j < m; j++) L[i * m + j] = C[i * m + j] + hi * ((j === q[i] ? 0 : 1) - r / n);
+  ranked(L, allowed, n, m, H - 1e-10, 3000, (a) => { if (ndiff(a, q) <= r) { const c = cost(C, a, m); if (c < H) { H = c; inc = a; } } return H - 1e-10; });
+  return inc;
+}
+
+// how many preference directions a set of plans exposes: effective rank of sum_x v v', v = phi(x) - phi(q)
+function directions(mo, S) {
+  const fq = planFeat(mo.X, S[0], mo.m), M = Array.from({ length: NF }, () => new Float64Array(NF));
+  for (let s = 1; s < S.length; s++) { const f = planFeat(mo.X, S[s], mo.m), v = f.map((x, k) => x - fq[k]); for (let i = 0; i < NF; i++) for (let j = 0; j < NF; j++) M[i][j] += v[i] * v[j]; }
+  let tr = 0, fr = 0; for (let i = 0; i < NF; i++) { tr += M[i][i]; for (let j = 0; j < NF; j++) fr += M[i][j] ** 2; }
+  return fr > 1e-12 ? tr * tr / fr : 0;
+}
+
+// distance from the learned to the true weights: the angle between them (degrees), feature changes measured over
+// typical small reassignments; only directions matter, since doubling every weight changes no decision
+function angleTo(W, c) {
+  const S = W.base.S, cs = quad(S, c, W.w) / Math.sqrt(quad(S, c, c) * quad(S, W.w, W.w));
+  return Math.acos(Math.min(1, Math.max(-1, cs))) * 180 / Math.PI;
+}
+function heldout(W, c) {                  // regret per cargo of the machine's plans on the held-out months
+  let s = 0;
+  for (const mo of W.test) s += cost(mo.C, lsa(edgeCosts(mo.X, c, mo.n, mo.m), mo.allowed, mo.n, mo.m), mo.m) - cost(mo.C, mo.astar, mo.m);
+  return s / W.test.length / W.n;
+}
+
+// the measures of one response (all per cargo)
+function measure(mo, q, S, xh, log) {
+  const n = mo.n, m = mo.m, Fq = cost(mo.C, q, m), Fz = Math.min(...S.map((x) => cost(mo.C, x, m))), Fh = cost(mo.C, xh, m);
+  return { V: (Fq - Fz) / n, beta: (Fh - Fz) / n, realized: (Fq - Fh) / n, considered: S.length, comparisons: log.length,
+    dist: log.length ? log.reduce((a, l) => a + l[0], 0) / log.length : NaN, gap: log.length ? log.reduce((a, l) => a + l[1], 0) / log.length : NaN,
+    directions: directions(mo, S), changed: ndiff(q, xh) };
+}
+const avgRows = (rows) => { const out = {}; for (const k of Object.keys(rows[0] || {})) { const v = rows.map((r) => r[k]).filter(Number.isFinite); out[k] = v.length ? v.reduce((a, b) => a + b, 0) / v.length : NaN; } return out; };
+
+// Human side with a fixed proposal: the starting weights' plan on every held-out month, R random draws per month.
+function measureFixed(wc, rc, setup, rep) {
+  const W = getWorld(wc), st = start(W, rc.n_known, rc.start_regret, rc.proxy0, rc.run_seed), L0 = new Linear(st.c0, W), rows = [];
+  const hs = setup === "A" ? rc.r_values : rc.k_values;
+  W.test.forEach((mo, t) => {
+    const Cm = L0.costs(mo), q = lsa(Cm, mo.allowed, mo.n, mo.m), Fq = cost(mo.C, q, mo.m);
+    let pool = null, oracle = {};
+    if (setup === "B") { pool = nearBest(Cm, mo.allowed, mo.n, mo.m, rc.eps, rc.k_max).plans; const best = Math.min(...pool.map((x) => cost(mo.C, x, mo.m))); hs.forEach((k) => { oracle[k] = (Fq - best) / mo.n; }); }
+    else hs.forEach((r) => { oracle[r] = (Fq - cost(mo.C, radiusBest(mo, q, r), mo.m)) / mo.n; });
+    for (let d = 0; d < rc.draws; d++) {
+      const order = pool ? RNG(rc.run_seed, t, d, 21).permutation(pool.length - 1).map((i) => i + 1) : null;
+      for (const h of hs) for (const eta of rc.etas) {
+        const rng = RNG(rc.run_seed, t, d, 23), log = [];
+        const { S, xh } = setup === "A" ? setupA(mo, q, h, rc.m_plans, eta, rc.procedure, rng, log) : setupB(mo, pool, order, h, eta, rc.procedure, rng, log);
+        rows.push({ h, eta, ...measure(mo, q, S, xh, log), oracleV: oracle[h], pool: pool ? pool.length : NaN });
+      }
+    }
+  });
+  const out = [];
+  for (const h of hs) for (const eta of rc.etas) out.push({ setup, rep, h, eta, ...avgRows(rows.filter((r) => r.h === h && r.eta === eta).map(({ h: _, eta: __, ...r }) => r)) });
+  return out;
+}
+
+// One closed-loop run of one setup at complexity h and comparison error eta. Every run of a replicate shares the same
+// world, starting weights and random numbers, whatever the setup, h or eta.
+function runLoop(wc, rc, setup, h, eta, progress) {
+  const W = getWorld(wc), st = start(W, rc.n_known, rc.start_regret, rc.proxy0, rc.run_seed);
+  const L = new Linear(st.c0, W), rngFit = RNG(rc.run_seed, 3), hist = [], months = [];
+  const path = [Array.from(L.c)], held = [heldout(W, L.c)], dist = [angleTo(W, L.c)];
+  W.months.forEach((mo, t) => {
+    const Cm = L.costs(mo), q = lsa(Cm, mo.allowed, mo.n, mo.m), rng = RNG(rc.run_seed, t, 23), log = [];
+    let res, poolSize = NaN;
+    if (setup === "A") res = setupA(mo, q, h, rc.m_plans, eta, rc.procedure, rng, log);
+    else {
+      const nb = nearBest(Cm, mo.allowed, mo.n, mo.m, rc.eps, rc.k_max); poolSize = nb.plans.length;
+      res = setupB(mo, nb.plans, RNG(rc.run_seed, t, 21).permutation(nb.plans.length - 1).map((i) => i + 1), h, eta, rc.procedure, rng, log);
+    }
+    const ms = measure(mo, q, res.S, res.xh, log), fh = planFeat(mo.X, res.xh, mo.m), fq = planFeat(mo.X, q, mo.m);
+    let al = 0; for (let k = 0; k < NF; k++) al += (L.c[k] - W.w[k]) * (fh[k] - fq[k]);
+    months.push({ ...ms, alignment: al / mo.n, pool: poolSize });
+    hist.push({ mo, q, xh: res.xh, others: [] });
+    L.refit(hist, rc.lr, rc.epochs, rc.margin, rngFit);
+    path.push(Array.from(L.c)); held.push(heldout(W, L.c)); dist.push(angleTo(W, L.c));
+    if (progress) progress(t + 1, W.months.length);
+  });
+  const w = Math.max(1, Math.min(rc.window, W.months.length));
+  return { setup, h, eta, held, dist, path, final: held.slice(-w).reduce((a, b) => a + b, 0) / w, avg: avgRows(months),
+    start_regret: st.achieved, start_lowest: st.lowest, start: W.natural(path[0]), end: W.natural(L.c), truth: W.natural(W.w) };
+}
+
+// ---------- objective-space map (for the contour plot) ----------
+function symEig(A) {                       // Jacobi: eigenvalues and eigenvectors (columns) of a symmetric matrix
+  const n = A.length, a = A.map((r) => Array.from(r)), V = Array.from({ length: n }, (_, i) => Array.from({ length: n }, (_, j) => (i === j ? 1 : 0)));
+  for (let sweep = 0; sweep < 100; sweep++) {
+    let off = 0; for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) off += a[i][j] ** 2;
+    if (off < 1e-22) break;
+    for (let p = 0; p < n; p++) for (let q = p + 1; q < n; q++) {
+      if (Math.abs(a[p][q]) < 1e-15) continue;
+      const th = (a[q][q] - a[p][p]) / (2 * a[p][q]), t = Math.sign(th || 1) / (Math.abs(th) + Math.sqrt(th * th + 1)), c = 1 / Math.sqrt(t * t + 1), s = t * c;
+      for (let k = 0; k < n; k++) { const akp = a[k][p], akq = a[k][q]; a[k][p] = c * akp - s * akq; a[k][q] = s * akp + c * akq; }
+      for (let k = 0; k < n; k++) { const apk = a[p][k], aqk = a[q][k]; a[p][k] = c * apk - s * aqk; a[q][k] = s * apk + c * aqk; }
+      for (let k = 0; k < n; k++) { const vkp = V[k][p], vkq = V[k][q]; V[k][p] = c * vkp - s * vkq; V[k][q] = s * vkp + c * vkq; }
+    }
+  }
+  return { vals: a.map((r, i) => r[i]), V };
+}
+const matVec = (M, v) => M.map((r) => r.reduce((s, x, j) => s + x * v[j], 0));
+const norm = (v) => Math.sqrt(dot(v, v));
+// Every weight vector is a direction; the map is centred on the true objective, distance from the centre = angle to it
+// (degrees, measured on typical small reassignments), axes = the starting direction and the main other direction of
+// the paths. Colour = regret per cargo of the plans each objective on the map recommends (training months).
+function objectiveMap(wc, paths, grid = 31, nMonths = 20) {
+  const W = getWorld(wc), { vals, V } = symEig(Array.from(W.base.S, (r) => Array.from(r)));
+  const f = (p) => V.map((_, i) => V.map((_, j) => V[i].reduce((s, _, k) => s + V[i][k] * p(Math.max(vals[k], 1e-12)) * V[j][k], 0)));
+  const Sh = f(Math.sqrt), Shi = f((x) => 1 / Math.sqrt(x));
+  let c = matVec(Sh, Array.from(W.w)); c = c.map((x) => x / norm(c));
+  const Z = paths.map((p) => p.map((v) => { const z = matVec(Sh, v); const nz = norm(z); return z.map((x) => x / nz); }));
+  const z0 = Z[0][0]; let u1 = z0.map((x, i) => x - dot(z0, c) * c[i]);
+  if (norm(u1) < 1e-9) { u1 = c.map(() => 0); u1[c.map(Math.abs).indexOf(Math.min(...c.map(Math.abs)))] = 1; u1 = u1.map((x, i) => x - dot(u1, c) * c[i]); }
+  u1 = u1.map((x) => x / norm(u1));
+  const R = Z.flat().map((z) => z.map((x, i) => x - dot(z, c) * c[i] - dot(z, u1) * u1[i]));
+  let u2 = c.map((_, i) => Math.sin(i + 1));                             // main direction of R by power iteration
+  for (let it = 0; it < 200; it++) { const nv = c.map(() => 0); for (const r of R) { const d = dot(r, u2); r.forEach((x, i) => { nv[i] += d * x; }); } if (norm(nv) < 1e-12) break; u2 = nv.map((x) => x / norm(nv)); }
+  u2 = u2.map((x, i) => x - dot(u2, c) * c[i] - dot(u2, u1) * u1[i]); u2 = u2.map((x) => x / norm(u2));
+  const chart = (z) => { const rad = Math.acos(Math.max(-1, Math.min(1, dot(z, c)))) * 180 / Math.PI, p = [dot(z, u1), dot(z, u2)], ip = Math.hypot(p[0], p[1]); return ip > 1e-12 ? [rad * p[0] / ip, rad * p[1] / ip] : [0, 0]; };
+  const P = Z.map((zs) => zs.map(chart));
+  const Rr = Math.min(Math.max(10, ...P.flat().map((p) => Math.hypot(p[0], p[1]))) * 1.25, 180);
+  const months = W.months.filter((_, i) => i % Math.max(1, Math.floor(W.months.length / nMonths)) === 0).slice(0, nMonths);
+  const g = Array.from({ length: grid }, (_, i) => -Rr + (2 * Rr * i) / (grid - 1)), val = [];
+  for (const y of g) {
+    const row = [];
+    for (const x of g) {
+      const rho = Math.hypot(x, y); if (rho > 180) { row.push(NaN); continue; }
+      const a = rho * Math.PI / 180, d = rho > 0 ? [x / rho, y / rho] : [0, 0];
+      const th = matVec(Shi, c.map((ci, i) => Math.cos(a) * ci + Math.sin(a) * (d[0] * u1[i] + d[1] * u2[i])));
+      let s = 0; for (const mo of months) s += cost(mo.C, lsa(edgeCosts(mo.X, th, mo.n, mo.m), mo.allowed, mo.n, mo.m), mo.m) - cost(mo.C, mo.astar, mo.m);
+      row.push(s / months.length / W.n);
+    }
+    val.push(row);
+  }
+  return { g, val, paths: P };
+}
+
+if (typeof self !== "undefined" && typeof window === "undefined") {        // background worker
+  self.onmessage = (ev) => {
+    const { id, job } = ev.data;
+    try {
+      let last = 0;
+      const prog = (t, T) => { const now = Date.now(); if (now - last > 200 || t === T) { last = now; self.postMessage({ id, type: "progress", t, T }); } };
+      const result = job.kind === "fixed" ? measureFixed(job.wc, job.rc, job.setup, job.rep)
+        : job.kind === "map" ? objectiveMap(job.wc, job.paths) : runLoop(job.wc, job.rc, job.setup, job.h, job.eta, prog);
+      self.postMessage({ id, type: "done", result });
+    } catch (e) { self.postMessage({ id, type: "error", message: String((e && e.message) || e) }); }
+  };
+}
+if (typeof module !== "undefined") module.exports = { runLoop, measureFixed, objectiveMap, getWorld, start, lsa, cost, nearBest, radiusBest, setupA, setupB, FEAT, RNG, ndiff };
+
+</script>
+<script>
+// ---------- small DOM helpers ----------
+const $ = (s, r = document) => r.querySelector(s);
+function h(tag, attrs = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") e.className = v; else if (k === "html") e.innerHTML = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v); else if (v !== undefined && v !== null && v !== false) e.setAttribute(k, v === true ? "" : v);
+  }
+  for (const c of kids.flat()) if (c !== null && c !== undefined && c !== false) e.append(c.nodeType ? c : document.createTextNode(String(c)));
+  return e;
+}
+const fmt = (x, d = 3) => (x === null || x === undefined || !Number.isFinite(x) ? "–" : Math.abs(x) >= 1000 ? x.toFixed(0) : x.toFixed(d));
+const smooth = (v, w) => v.map((_, i) => { const s = v.slice(Math.max(0, i - w + 1), i + 1).filter(Number.isFinite); return s.length ? s.reduce((a, b) => a + b, 0) / s.length : NaN; });
+function download(name, text) { const a = h("a", { href: URL.createObjectURL(new Blob([text], { type: "text/csv" })), download: name }); document.body.append(a); a.click(); a.remove(); }
+function toCSV(rows) {
+  if (!rows.length) return "";
+  const keys = Object.keys(rows[0]), q = (v) => (typeof v === "string" && /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+  return [keys.join(","), ...rows.map((r) => keys.map((k) => q(r[k] ?? "")).join(","))].join("\n");
+}
+
+function input(k, onchange) {
+  const [sym, , what, range, kind, , opts] = P[k], id = "in_" + k + "_" + Math.random().toString(36).slice(2, 7);
+  const tip = `${what}\n\nRange: ${range}`;
+  let ctl;
+  if (kind === "bool") {
+    ctl = h("input", { type: "checkbox", id, onchange: (e) => { vals[k] = e.target.checked; onchange && onchange(); } }); ctl.checked = vals[k];
+    return h("div", { class: "field check", title: tip }, ctl, h("label", { for: id }, label(k)), h("span", { class: "info", title: tip }, "ⓘ"));
+  }
+  if (kind === "select") {
+    ctl = h("select", { id, onchange: (e) => { vals[k] = e.target.value; onchange && onchange(); } }, ...opts.map((o) => h("option", { value: o }, o))); ctl.value = vals[k];
+  } else {
+    ctl = h("input", { type: "number", id, step: kind === "int" ? 1 : "any", value: vals[k], onchange: (e) => { const v = Number(e.target.value); if (Number.isFinite(v)) vals[k] = kind === "int" ? Math.round(v) : v; e.target.value = vals[k]; onchange && onchange(); } });
+  }
+  return h("div", { class: "field" }, h("label", { for: id, title: tip }, label(k), " ", h("span", { class: "info" }, "ⓘ")), ctl, h("div", { class: "hint" }, what));
+}
+
+// ---------- charts (plain SVG, hover shows values) ----------
+const COLORS = ["var(--s1)", "var(--s2)", "var(--s3)", "var(--s4)", "var(--s5)", "var(--s6)", "var(--s7)", "var(--s8)"];
+const NS = "http://www.w3.org/2000/svg";
+const sv = (tag, a = {}) => { const e = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(a)) e.setAttribute(k, v); return e; };
+function ticks(lo, hi, n = 5) {
+  if (!(hi > lo)) { hi = lo + 1; lo -= 1; }
+  const step0 = (hi - lo) / n, mag = 10 ** Math.floor(Math.log10(step0)), r = step0 / mag;
+  const step = (r < 1.5 ? 1 : r < 3 ? 2 : r < 7 ? 5 : 10) * mag, out = [];
+  for (let i = Math.ceil(lo / step); i * step <= hi + 1e-9 * step; i++) out.push(+(i * step).toPrecision(12) || 0);
+  return out;
+}
+// o = {title, note, ylab, xlab, x: [...], series: [{name, values, color, dash}], hlines: [{y, label}]}
+function lineChart(o) {
+  const W = 720, H = 270, m = { l: 58, r: 16, t: 12, b: 38 }, x = o.x;
+  const all = o.series.flatMap((s) => s.values).concat((o.hlines || []).map((l) => l.y)).filter(Number.isFinite);
+  let lo = Math.min(...all), hi = Math.max(...all); if (o.zero) { lo = Math.min(lo, 0); hi = Math.max(hi, 0); }
+  if (!all.length) { lo = 0; hi = 1; } const pad = (hi - lo || 1) * 0.06; lo -= pad; hi += pad;
+  const yt = ticks(lo, hi), x0 = x[0], x1 = x[x.length - 1];
+  const X = (v) => m.l + ((v - x0) / (x1 - x0 || 1)) * (W - m.l - m.r), Y = (v) => m.t + (1 - (v - lo) / (hi - lo)) * (H - m.t - m.b);
+  const svg = sv("svg", { viewBox: `0 0 ${W} ${H}`, class: "plot", role: "img", "aria-label": o.title });
+  for (const v of yt) {
+    svg.append(sv("line", { x1: m.l, x2: W - m.r, y1: Y(v), y2: Y(v), class: "grid" }));
+    const t = sv("text", { x: m.l - 6, y: Y(v) + 4, class: "tick", "text-anchor": "end" }); t.textContent = +v.toPrecision(4); svg.append(t);
+  }
+  const xt = o.xlabels ? x.map((v, i) => [v, o.xlabels[i]]) : ticks(x0, x1, 6).filter((v) => Number.isInteger(v)).map((v) => [v, v]);
+  for (const [v, lab] of xt) {
+    const t = sv("text", { x: X(v), y: H - m.b + 16, class: "tick", "text-anchor": "middle" }); t.textContent = lab; svg.append(t);
+  }
+  svg.append(sv("line", { x1: m.l, x2: W - m.r, y1: H - m.b, y2: H - m.b, class: "axis" }));
+  const xl = sv("text", { x: (m.l + W - m.r) / 2, y: H - 4, class: "lab", "text-anchor": "middle" }); xl.textContent = o.xlab || "month"; svg.append(xl);
+  const yl = sv("text", { x: 12, y: (m.t + H - m.b) / 2, class: "lab", "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` }); yl.textContent = o.ylab || ""; svg.append(yl);
+  for (const l of o.hlines || []) {
+    svg.append(sv("line", { x1: m.l, x2: W - m.r, y1: Y(l.y), y2: Y(l.y), class: "ref" }));
+    if (l.label) { const t = sv("text", { x: W - m.r - 4, y: Y(l.y) - 5, class: "reflab", "text-anchor": "end" }); t.textContent = l.label; svg.append(t); }
+  }
+  o.series.forEach((s, si) => {
+    let d = "", pen = false;
+    s.values.forEach((v, i) => { if (Number.isFinite(v)) { d += `${pen ? "L" : "M"}${X(x[i]).toFixed(1)},${Y(v).toFixed(1)}`; pen = true; } else pen = false; });
+    svg.append(sv("path", { d, fill: "none", stroke: s.color || COLORS[si], "stroke-width": s.width || 2, "stroke-dasharray": s.dash ? "6 4" : "none", "stroke-linejoin": "round", "stroke-linecap": "round" }));
+    if (o.markers) s.values.forEach((v, i) => { if (Number.isFinite(v)) svg.append(sv("circle", { cx: X(x[i]), cy: Y(v), r: 3.5, fill: s.color || COLORS[si], stroke: "var(--surface)", "stroke-width": 1.5 })); });
+  });
+  const vline = sv("line", { y1: m.t, y2: H - m.b, class: "cross", visibility: "hidden" }); svg.append(vline);
+  const dots = o.series.map((s, si) => { const c = sv("circle", { r: 4, fill: s.color || COLORS[si], stroke: "var(--surface)", "stroke-width": 2, visibility: "hidden" }); svg.append(c); return c; });
+  const hit = sv("rect", { x: m.l, y: m.t, width: W - m.l - m.r, height: H - m.t - m.b, fill: "transparent" }); svg.append(hit);
+  const tip = h("div", { class: "tip", hidden: true });
+  const move = (ev) => {
+    const r = svg.getBoundingClientRect(), px = ((ev.clientX - r.left) / r.width) * W;
+    let i = 0; x.forEach((v, j) => { if (Math.abs(X(v) - px) < Math.abs(X(x[i]) - px)) i = j; });
+    vline.setAttribute("x1", X(x[i])); vline.setAttribute("x2", X(x[i])); vline.setAttribute("visibility", "visible");
+    tip.innerHTML = ""; tip.append(h("div", { class: "tiph" }, `${o.xlab || "month"} ${o.xlabels ? o.xlabels[i] : x[i]}`));
+    o.series.forEach((s, si) => {
+      const v = s.values[i]; const ok = Number.isFinite(v);
+      dots[si].setAttribute("visibility", ok ? "visible" : "hidden"); if (ok) { dots[si].setAttribute("cx", X(x[i])); dots[si].setAttribute("cy", Y(v)); }
+      tip.append(h("div", { class: "tipr" }, h("span", { class: "sw" + (s.dash ? " dash" : ""), style: `--c:${s.color || COLORS[si]}` }), h("span", {}, s.name), h("b", {}, fmt(v))));
+    });
+    tip.hidden = false; const rr = svg.getBoundingClientRect(), left = ev.clientX - rr.left;
+    tip.style.left = Math.min(left + 14, rr.width - tip.offsetWidth - 4) + "px"; tip.style.top = "8px";
+  };
+  hit.addEventListener("mousemove", move);
+  hit.addEventListener("mouseleave", () => { tip.hidden = true; vline.setAttribute("visibility", "hidden"); dots.forEach((d) => d.setAttribute("visibility", "hidden")); });
+  const legend = h("div", { class: "legend" }, ...o.series.map((s, si) => h("span", { class: "li" }, h("span", { class: "sw" + (s.dash ? " dash" : ""), style: `--c:${s.color || COLORS[si]}` }), s.name)),
+    ...(o.hlines || []).filter((l) => l.legend).map((l) => h("span", { class: "li" }, h("span", { class: "sw ref" }), l.legend)));
+  return h("figure", { class: "chart" }, h("figcaption", {}, h("h3", {}, o.title), o.sub ? h("p", { class: "sub" }, o.sub) : null), legend,
+    h("div", { class: "plotwrap" }, svg, tip), o.note ? h("p", { class: "note" }, o.note) : null);
+}
+function barChart(o) {           // o = {title, rows: [{label, value, color}], note}
+  return h("figure", { class: "chart" }, h("figcaption", {}, h("h3", {}, o.title)),
+    h("div", { class: "bars" }, ...o.rows.map((r) => h("div", { class: "bar", title: `${r.label}: ${(100 * r.value).toFixed(1)}%` },
+      h("span", { class: "bl" }, r.label), h("span", { class: "bt" }, h("span", { class: "bf", style: `width:${(100 * r.value).toFixed(1)}%;background:${r.color}` })), h("b", {}, `${(100 * r.value).toFixed(0)}%`)))),
+    o.note ? h("p", { class: "note" }, o.note) : null);
+}
+function table(head, rows, cls = "") {
+  return h("div", { class: "tablewrap" }, h("table", { class: cls }, h("thead", {}, h("tr", {}, ...head.map((c) => h("th", {}, c)))),
+    h("tbody", {}, ...rows.map((r) => h("tr", {}, ...r.map((c) => h("td", {}, typeof c === "number" ? fmt(c) : c)))))));
+}
+
+
+// ---------- parameters: symbol, name, what it does, allowed range, kind, default ----------
+const P = {
+  seed: ["world seed", "", "Random seed of the world (months, attributes, true weights). Replicate r uses world seed + r.", "Any whole number ≥ 0.", "int", 0],
+  n_cargo: ["n", "cargoes per month", "Every cargo must be assigned to exactly one ship.", "2 to 300, and at most m.", "int", 20],
+  n_ship: ["m", "ships per month", "Each ship carries at most one cargo; extra ships stay idle. Ignored when idle ships s ≥ 0.", "At least n.", "int", 26],
+  slack: ["s", "idle ships", "Ships per month = cargoes + s. −1: use m instead.", "−1, or 0 and up.", "int", -1],
+  elig_min: ["e_min", "fewest allowed ships per cargo", "Each cargo may go to between e_min and e_max ships (plus one always-allowed ship). 0: use κ instead.", "0, or e.g. 3.", "int", 0],
+  elig_max: ["e_max", "most allowed ships per cargo", "See e_min.", "0, or ≥ e_min.", "int", 0],
+  density: ["κ", "share of allowed pairs", "Share of cargo–ship pairs allowed (the ship must also be big enough; one complete plan is always allowed).", "Above 0, up to 1.", "float", 0.35],
+  T: ["T", "learning months", "Months of the closed loop: the machine proposes, the human responds, the machine updates.", "1 to 2000.", "int", 60],
+  n_test: ["T_test", "held-out months", "Separate months on which the machine's plans are scored (never used for learning).", "1 or more, e.g. 20.", "int", 20],
+  wait_threshold: ["τ_w", "waiting threshold (days)", "Nonlinear feature: each day an urgent cargo waits beyond τ_w days is extra bad.", "0 to 30 days.", "float", 5],
+  urgent_wait_weight: ["w_u", "true weight: urgent waiting beyond τ_w", "Extra cost per day an urgent cargo waits beyond τ_w (cost units: 1 = the cost change of one typical small reassignment).", "≥ 0, e.g. 0.15. 0 switches it off.", "float", 0.15],
+  ballast_threshold: ["δ_b", "long-trip threshold (1000 nm)", "Nonlinear feature: empty trips longer than δ_b are disproportionately bad. Typical empty trips are 0.6–3.4 thousand nm.", "≥ 0, e.g. 2.", "float", 2],
+  ballast_weight: ["w_b", "true weight: long empty trips", "Extra cost = w_b × (empty distance − δ_b)², per (1000 nm)².", "≥ 0, e.g. 1. 0 switches it off.", "float", 1],
+  trap_penalty: ["π", "true weight: special cargo on a basic ship", "Extra cost per special cargo on a basic-service ship.", "> 0, e.g. 2.", "float", 2],
+  w_low: ["w̲", "smallest familiar weight", "True weights of the 8 familiar features: fixed sign × a random size between w̲ and w̄ (then scaled to the cost unit).", "≥ 0 and ≤ w̄.", "float", 0.5],
+  w_high: ["w̄", "largest familiar weight", "See w̲.", "≥ w̲.", "float", 1.5],
+  special_share: ["p_sp", "share of special cargo", "Share of cargoes that need special handling.", "0 to 1.", "float", 0.3],
+  align_near: ["a_near", "premium = destination fit, near", "For a special cargo, the chance that a ship's destination fit goes with premium service on its closest ships.", "0 to 1, e.g. 0.95.", "float", 0.95],
+  align_far: ["a_far", "premium = destination fit, far", "The same chance on its most distant ships (linear in between).", "0 to 1, e.g. 0.3.", "float", 0.3],
+  n_ref: ["T_ref", "months to measure scales", "Months used only to set feature scales and the cost unit.", "10 or more.", "int", 20],
+  n_moves: ["M", "moves per measuring month", "Random small reassignments per measuring month.", "T_ref × M of a few thousand is plenty.", "int", 300],
+  n_calib: ["T_cal", "months to set R₀", "Separate months used only to set the starting regret.", "50 or more.", "int", 60],
+  start_regret: ["R₀", "starting regret", "Regret per cargo of the machine's starting weights (the achieved value is reported). The lowest possible is the regret with true weights on the first d features and everything else at its start value.", "≥ 0.", "float", 0.4],
+  n_known: ["d", "features that start at wrong weights", "The machine has a weight on all 12 features. The first d of the 11 true features start at wrong weights (turned away from the truth until the starting regret is R₀); the other 11 − d start at 0.", "1 to 11. Order: the 8 familiar features, then urgent waiting, long empty trips, special cargo on a basic ship.", "int", 6],
+  proxy0: ["P₀", "starting weight on the wrong feature", "Starting weight on 'special cargo on a ship going elsewhere' (true weight 0).", "≥ 0, e.g. 1.", "float", 1],
+  margin: ["μ", "margin per changed cargo", "Training asks the human's plan to beat every other feasible plan by μ for each cargo assigned differently.", "≥ 0, e.g. 0.05–0.2.", "float", 0.1],
+  lr: ["α", "learning rate", "Step size of the Adam optimizer.", "> 0, e.g. 0.005 to 0.05.", "float", 0.02],
+  epochs: ["E", "refit passes per month", "Each month the machine passes E times over every past month.", "1 to 50.", "int", 2],
+  etas: ["η", "comparison error rates (list)", "Each comparison of two plans picks the truly worse one with probability η. Every value is run.", "Comma-separated, each from 0 to below 0.5, e.g. 0, 0.1, 0.3.", "list", "0, 0.1, 0.3"],
+  procedure: ["procedure", "how the human compares a set", "Sequential: keep an incumbent and compare it with each next plan. Tournament: random bracket, winners advance. The same procedure is used in both setups; both take one comparison per extra plan.", "sequential or tournament.", "select", "sequential", ["sequential", "tournament"]],
+  control: ["control", "random-choice control", "Also run coin-flip comparisons (η = 0.5): any improvement it shows is not real learning from the human.", "On or off.", "bool", true],
+  r_values: ["r", "revision radii (list)", "Setup A: the human may change at most r cargo assignments of the machine's plan. Every value is run.", "Comma-separated whole numbers ≥ 0, e.g. 0, 1, 2, 3, 4.", "list", "0, 1, 2, 3, 4"],
+  m_plans: ["m_A", "plans the human considers in A", "Setup A: the machine's plan plus up to m_A − 1 random feasible edits within radius r (one comparison each). Equal to k for matched workload.", "1 or more, e.g. 8.", "int", 8],
+  k_values: ["k", "plans shown (list)", "Setup B: the machine's plan plus k − 1 plans drawn uniformly from its near-optimal region. Menus are nested: a larger k adds plans and keeps the earlier ones. Every value is run.", "Comma-separated whole numbers ≥ 1, e.g. 1, 2, 4, 8, 16.", "list", "1, 2, 4, 8, 16"],
+  eps: ["ε", "near-optimal width", "Setup B: the near-optimal region is every plan the machine rates within ε of its own best (cost units).", "> 0, e.g. 1.", "float", 1],
+  k_max: ["K_max", "most plans in the region", "Setup B: computation cap on the plans listed in the near-optimal region. If the region is larger, sampling is uniform over the K_max best.", "k or more, e.g. 200.", "int", 200],
+  draws: ["R", "draws per month (fixed proposal)", "For the human-side panels: random draws of edits, menus and comparison errors per held-out month.", "1 or more, e.g. 5.", "int", 5],
+  reps: ["reps", "replicates", "Independent worlds (world seed + r, run seed + r). Within a replicate every setting shares the same months, starting weights and random numbers.", "1 or more, e.g. 3.", "int", 3],
+  run_seed: ["run seed", "", "Seed of the starting error direction, the refit order, the human's random edits and comparison errors, and the menus.", "Any whole number ≥ 0.", "int", 0],
+  window: ["w", "months averaged at the end", "Held-out regret after learning = average over the last w months.", "1 to T.", "int", 10],
+  workers: ["workers", "parallel workers", "Runs computed at the same time in the background.", "1 to the number of processor cores.", "int", Math.max(1, Math.min(8, ((typeof navigator !== "undefined" && navigator.hardwareConcurrency) || 2) - 1))],
+};
+const WORLD_KEYS = ["seed", "n_cargo", "n_ship", "slack", "elig_min", "elig_max", "density", "T", "n_test", "wait_threshold", "urgent_wait_weight", "ballast_threshold",
+  "ballast_weight", "trap_penalty", "special_share", "align_near", "align_far", "w_low", "w_high", "n_ref", "n_moves", "n_calib"];
+const SIDEBAR = [
+  ["Machine's starting weights", true, ["start_regret", "n_known", "proxy0"]],
+  ["Learning", false, ["margin", "lr", "epochs"]],
+  ["Human comparisons (both setups)", true, ["etas", "procedure", "control"]],
+  ["Setup A: modify one plan", true, ["r_values", "m_plans"]],
+  ["Setup B: choose among k plans", true, ["k_values", "eps", "k_max"]],
+  ["Run length, replicates and seeds", false, ["T", "n_test", "draws", "reps", "window", "seed", "run_seed", "workers"]],
+];
+const WORLD_PAGE = [
+  ["True planner: weights of the familiar and nonlinear features", ["w_low", "w_high", "wait_threshold", "urgent_wait_weight", "ballast_threshold", "ballast_weight", "trap_penalty"]],
+  ["Special cargo", ["special_share", "align_near", "align_far"]],
+  ["Months: cargoes, ships and allowed pairs", ["n_cargo", "n_ship", "slack", "density", "elig_min", "elig_max"]],
+  ["Measurement", ["n_ref", "n_moves", "n_calib"]],
+];
+const label = (k) => (P[k][1] ? `${P[k][0]} — ${P[k][1]}` : P[k][0]);
+const vals = Object.fromEntries(Object.entries(P).map(([k, v]) => [k, v[5]]));
+const nums = (s) => String(s).split(",").map((x) => x.trim()).filter(Boolean).map(Number);
+
+function listInput(k, onchange) {
+  const [, , what, range] = P[k], tip = `${what}\n\nRange: ${range}`;
+  const ctl = h("input", { type: "text", value: vals[k], onchange: (e) => { vals[k] = e.target.value; onchange && onchange(); } });
+  return h("div", { class: "field" }, h("label", { title: tip }, label(k), " ", h("span", { class: "info" }, "ⓘ")), ctl, h("div", { class: "hint" }, what));
+}
+const field = (k, cb) => (P[k][4] === "list" ? listInput(k, cb) : input(k, cb));
+
+// ---------- jobs: background workers when the browser allows, otherwise this page ----------
+const CORE_SRC = document.getElementById("core").textContent;
+let workerURL = null, workersOK = true;
+function doJob(job, prog) {
+  return job.kind === "fixed" ? measureFixed(job.wc, job.rc, job.setup, job.rep) : job.kind === "map" ? objectiveMap(job.wc, job.paths) : runLoop(job.wc, job.rc, job.setup, job.h, job.eta, prog);
+}
+function runJobs(jobs, nWorkers, onProgress) {
+  return new Promise((resolve, reject) => {
+    const out = new Array(jobs.length), frac = new Array(jobs.length).fill(0); let done = 0;
+    const report = () => onProgress && onProgress(frac.reduce((a, b) => a + b, 0) / jobs.length, done);
+    const finish = (i, r) => { out[i] = r; frac[i] = 1; done++; report(); if (done === jobs.length) resolve(out); };
+    const local = () => {
+      let i = 0;
+      const step = () => { if (i >= jobs.length) return; try { finish(i, doJob(jobs[i])); } catch (e) { reject(e); return; } i++; setTimeout(step, 0); };
+      setTimeout(step, 30);
+    };
+    if (!workersOK) { local(); return; }
+    let next = 0, failed = false;
+    for (let w = 0; w < Math.max(1, Math.min(nWorkers, jobs.length)); w++) {
+      let wk;
+      try { if (!workerURL) workerURL = URL.createObjectURL(new Blob([CORE_SRC], { type: "text/javascript" })); wk = new Worker(workerURL); }
+      catch (e) { workersOK = false; local(); return; }
+      const feed = () => { if (next >= jobs.length) { wk.terminate(); return; } const i = next++; wk.postMessage({ id: i, job: jobs[i] }); };
+      wk.onmessage = (ev) => {
+        const d = ev.data;
+        if (d.type === "progress") { frac[d.id] = 0.98 * d.t / d.T; report(); }
+        else if (d.type === "done") { finish(d.id, d.result); feed(); }
+        else reject(new Error(d.message));
+      };
+      wk.onerror = (e) => { e.preventDefault(); if (failed) return; failed = true; workersOK = false; next = jobs.length; local(); };
+      feed();
+    }
+  });
+}
+
+// ---------- validation and job list ----------
+function configs(v) {
+  const wc = Object.fromEntries(WORLD_KEYS.map((k) => [k, v[k]]));
+  let etas = nums(v.etas); if (v.control && !etas.includes(0.5)) etas = [...etas, 0.5];
+  const rc = { start_regret: v.start_regret, n_known: v.n_known, proxy0: v.proxy0, margin: v.margin, lr: v.lr, epochs: v.epochs, etas, procedure: v.procedure,
+    r_values: nums(v.r_values), m_plans: v.m_plans, k_values: nums(v.k_values), eps: v.eps, k_max: v.k_max, draws: v.draws, run_seed: v.run_seed, window: v.window };
+  return { wc, rc };
+}
+function problems(v) {
+  const out = [], m = v.slack >= 0 ? v.n_cargo + v.slack : v.n_ship, bad = (s) => nums(s).some((x) => !Number.isFinite(x));
+  if (v.n_cargo < 2) out.push("n must be at least 2");
+  if (v.n_cargo > m) out.push("need at least as many ships as cargoes (n ≤ m)");
+  if (!(v.n_known >= 1 && v.n_known <= 11)) out.push("d must be between 1 and 11");
+  if (!(v.density > 0 && v.density <= 1)) out.push("κ must be above 0 and at most 1");
+  if (v.w_low > v.w_high) out.push("w̲ must not exceed w̄");
+  if (v.elig_max > 0 && v.elig_min > v.elig_max) out.push("e_min must not exceed e_max");
+  if (bad(v.etas) || !nums(v.etas).length || nums(v.etas).some((x) => x < 0 || x > 0.5)) out.push("η values must be numbers from 0 to 0.5");
+  if (bad(v.r_values) || !nums(v.r_values).length || nums(v.r_values).some((x) => x < 0 || !Number.isInteger(x))) out.push("r values must be whole numbers ≥ 0");
+  if (bad(v.k_values) || !nums(v.k_values).length || nums(v.k_values).some((x) => x < 1 || !Number.isInteger(x))) out.push("k values must be whole numbers ≥ 1");
+  if (!(v.eps > 0)) out.push("ε must be above 0");
+  if (v.T < 1 || v.n_test < 1 || v.reps < 1 || v.draws < 1) out.push("T, T_test, R and replicates must be at least 1");
+  return out;
+}
+
+// ---------- results ----------
+let R = null;           // {v, wc, rc, fixed: [...rows], loops: [...results]}
+const ETA_CTRL = 0.5;
+const etaName = (e) => (e === ETA_CTRL ? "random choice (η = 0.5)" : `η = ${e}`);
+function etaStyle(R, e) {
+  const real = R.rc.etas.filter((x) => x !== ETA_CTRL);
+  return e === ETA_CTRL ? { color: "var(--muted)", dash: true } : { color: COLORS[real.indexOf(e) % 8] };
+}
+const avgBy = (rows, f, keyF) => {
+  const g = new Map();
+  for (const r of rows) { const k = keyF(r); if (!g.has(k)) g.set(k, []); const v = f(r); if (Number.isFinite(v)) g.get(k).push(v); }
+  return (k) => { const v = g.get(k) || []; return v.length ? v.reduce((a, b) => a + b, 0) / v.length : NaN; };
+};
+
+function setupPanels(R, setup) {
+  const hs = setup === "A" ? R.rc.r_values : R.rc.k_values, xl = setup === "A" ? "revision radius r" : "plans shown k";
+  const fx = R.fixed.filter((r) => r.setup === setup), lp = R.loops.filter((r) => r.setup === setup);
+  const x = hs.map((_, i) => i), common = { x, xlabels: hs.map(String), xlab: xl, markers: true, zero: true };
+  const series = (rows, f) => R.rc.etas.map((e) => { const g = avgBy(rows.filter((r) => r.eta === e), f, (r) => r.h); return { name: etaName(e), values: hs.map(g), ...etaStyle(R, e) }; });
+  const orc = avgBy(fx, (r) => r.oracleV, (r) => r.h);
+  const oracle = { name: setup === "A" ? "best plan within radius r (diagnostic)" : "best plan in the whole near-optimal region (diagnostic)", values: hs.map(orc), color: "var(--text2)", dash: true, width: 1.5 };
+  const startReg = lp.length ? lp[0].held[0] : NaN;
+  return h("section", { class: "setup" },
+    h("h2", {}, setup === "A" ? "Setup A: modify one proposal" : "Setup B: choose among k plans"),
+    h("p", { class: "lede" }, setup === "A"
+      ? `The human explores up to ${R.rc.m_plans - 1} random feasible edits of the machine's plan within radius r (${R.rc.procedure} comparisons). The first three panels hold the proposal fixed (the starting weights' plan on the held-out months); the last panel uses separate closed-loop runs.`
+      : `The machine shows its plan plus k − 1 plans drawn uniformly from the plans it rates within ε = ${R.rc.eps} of its best (${R.rc.procedure} comparisons). The first three panels hold the proposal fixed; the last panel uses separate closed-loop runs.`),
+    h("div", { class: "two" },
+      lineChart({ ...common, title: "Best available improvement", sub: "true cost of the proposal minus the best plan the human considered, per cargo", ylab: "per cargo", series: [...series(fx, (r) => r.V), oracle] }),
+      lineChart({ ...common, title: "Human selection error", sub: "true cost of the human's pick minus the best plan considered, per cargo", ylab: "per cargo", series: series(fx, (r) => r.beta) }),
+      lineChart({ ...common, title: "Realized improvement", sub: "true cost of the proposal minus the human's pick, per cargo (below 0: the human made it worse)", ylab: "per cargo", series: series(fx, (r) => r.realized) }),
+      lineChart({ ...common, title: "After learning: held-out machine regret", sub: `regret per cargo of the machine's plans on held-out months, average of the last ${R.rc.window} months`, ylab: "regret per cargo",
+        series: series(lp, (r) => r.final), hlines: [{ y: startReg, label: `before learning: ${fmt(startReg)}` }] })));
+}
+
+function convergencePanel(R) {
+  const mk = (arr, f) => h("select", {}, ...arr.map((x) => h("option", { value: x }, f(x))));
+  const eSel = mk(R.rc.etas, etaName), rSel = mk(R.rc.r_values, (x) => `Setup A: r = ${x}`), kSel = mk(R.rc.k_values, (x) => `Setup B: k = ${x}`);
+  rSel.value = R.rc.r_values[Math.min(2, R.rc.r_values.length - 1)]; kSel.value = R.rc.k_values[R.rc.k_values.length - 1];
+  const slot = h("div", { class: "two" });
+  const draw = () => {
+    const e = +eSel.value, T = R.loops[0].held.length, x = Array.from({ length: T }, (_, i) => i);
+    const runs = [["A", +rSel.value, `Setup A, r = ${rSel.value}`, "var(--s1)"], ["B", +kSel.value, `Setup B, k = ${kSel.value}`, "var(--s2)"]];
+    const series = (f) => runs.flatMap(([s, hh, name, color]) => {
+      const mean = (ee) => { const rs = R.loops.filter((r) => r.setup === s && r.h === hh && r.eta === ee); return rs.length ? x.map((t) => rs.reduce((a, r) => a + f(r)[t], 0) / rs.length) : null; };
+      const out = [{ name, values: mean(e), color }];
+      if (e !== ETA_CTRL && R.rc.etas.includes(ETA_CTRL)) out.push({ name: `${name}, random choice`, values: mean(ETA_CTRL), color, dash: true, width: 1.5 });
+      return out.filter((o) => o.values);
+    });
+    slot.replaceChildren(
+      lineChart({ title: "Distance from the learned to the true weights", sub: "angle between them, degrees; 0° = the same tradeoffs", ylab: "degrees", xlab: "training month T", x, zero: true, series: series((r) => r.dist) }),
+      lineChart({ title: "Held-out regret", sub: "regret per cargo of the machine's plans on held-out months", ylab: "regret per cargo", xlab: "training month T", x, zero: true, series: series((r) => r.held) }));
+  };
+  [eSel, rSel, kSel].forEach((s) => s.addEventListener("change", draw)); draw();
+  return h("section", {}, h("h2", {}, "Convergence"),
+    h("p", { class: "lede" }, `Average over replicates; month 0 = the shared starting weights. Dashed: the same setting with coin-flip comparisons (η = 0.5). Distance is an angle because only the direction of the weights matters: doubling every weight changes no decision.`),
+    h("div", { class: "row" }, eSel, rSel, kSel), slot);
+}
+
+function monthsPanel(R) {
+  const etas = R.rc.etas, sel = h("select", {}, ...etas.map((e) => h("option", { value: e }, etaName(e)))), slot = h("div", { class: "two" });
+  const draw = () => {
+    const e = +sel.value, T = R.loops[0].held.length, x = Array.from({ length: T }, (_, i) => i);
+    const one = (setup, hs, name) => {
+      const series = hs.map((hh, i) => {
+        const runs = R.loops.filter((r) => r.setup === setup && r.h === hh && r.eta === e);
+        return { name: `${name} = ${hh}`, values: x.map((t) => runs.reduce((a, r) => a + r.held[t], 0) / runs.length), color: COLORS[i % 8] };
+      });
+      return lineChart({ title: `Setup ${setup}: held-out regret over the months`, sub: `${etaName(e)}, average over replicates; month 0 = the starting weights`, ylab: "regret per cargo", x, zero: true, series });
+    };
+    slot.replaceChildren(one("A", R.rc.r_values, "r"), one("B", R.rc.k_values, "k"));
+  };
+  sel.addEventListener("change", draw); draw();
+  return h("section", {}, h("h2", {}, "Learning speed"), h("div", { class: "row" }, h("label", {}, "comparison error ", sel)), slot);
+}
+
+function measuresPanel(R) {
+  const rows = [];
+  for (const setup of ["A", "B"]) for (const hh of setup === "A" ? R.rc.r_values : R.rc.k_values) for (const e of R.rc.etas) {
+    const lp = R.loops.filter((r) => r.setup === setup && r.h === hh && r.eta === e); if (!lp.length) continue;
+    const a = (f) => lp.reduce((s, r) => s + f(r), 0) / lp.length;
+    rows.push({ setup, complexity: setup === "A" ? `r = ${hh}` : `k = ${hh}`, eta: etaName(e), plans_considered: a((r) => r.avg.considered), comparisons: a((r) => r.avg.comparisons),
+      distance: a((r) => r.avg.dist), gap: a((r) => r.avg.gap), directions: a((r) => r.avg.directions), potential: a((r) => r.avg.V), error: a((r) => r.avg.beta),
+      realized: a((r) => r.avg.realized), alignment: a((r) => r.avg.alignment), heldout_regret: a((r) => r.final) });
+  }
+  const head = ["setup", "complexity", "comparison error", "plans considered", "comparisons", "distance between compared plans", "true gap between compared plans",
+    "preference directions exposed", "potential improvement V", "response error β", "realized improvement", "update alignment", "held-out regret after learning"];
+  return h("section", {}, h("h2", {}, "Common measures (closed-loop runs, average over months and replicates)"),
+    h("button", { class: "ghost", onclick: () => download("measures.csv", toCSV(rows)) }, "download measures.csv"),
+    table(head, rows.map((r) => Object.values(r))),
+    h("p", { class: "note" }, "Distance = share of cargoes assigned differently. Gap = true cost difference per cargo. Preference directions exposed = effective number of independent feature directions in which the considered plans differ from the machine's plan. Update alignment = (machine weights − true weights) · (features of the human's plan − features of the proposal), per cargo; it is always at least the realized improvement. Positive means the update moves the weights toward the truth."));
+}
+
+// the parameter convergence map: contour of regret over objective directions, with the paths of one A and one B run
+const SEQ = ["#e9f2fc", "#bcd6f4", "#8bb8ea", "#5a97dc", "#2a78d6", "#1d5aa6", "#123d73"];
+function seqColor(t) { t = Math.max(0, Math.min(1, t)) * (SEQ.length - 1); const i = Math.min(SEQ.length - 2, Math.floor(t)), f = t - i;
+  const p = (c) => [1, 3, 5].map((k) => parseInt(c.slice(k, k + 2), 16)), a = p(SEQ[i]), b = p(SEQ[i + 1]); return `rgb(${a.map((x, k) => Math.round(x + (b[k] - x) * f)).join(",")})`; }
+function mapChart(map, runs) {
+  const S = 560, m = { l: 52, r: 16, t: 12, b: 44 }, g = map.g, n = g.length, lo = g[0], hi = g[n - 1];
+  const X = (v) => m.l + ((v - lo) / (hi - lo)) * (S - m.l - m.r), Y = (v) => m.t + (1 - (v - lo) / (hi - lo)) * (S - m.t - m.b);
+  const fin = map.val.flat().filter(Number.isFinite), vmin = Math.min(...fin), vmax = Math.max(...fin);
+  const svg = sv("svg", { viewBox: `0 0 ${S} ${S}`, class: "plot", role: "img", "aria-label": "objective space map" });
+  const cw = (S - m.l - m.r) / (n - 1), ch = (S - m.t - m.b) / (n - 1);
+  map.val.forEach((row, i) => row.forEach((v, j) => { if (Number.isFinite(v)) svg.append(sv("rect", { x: X(g[j]) - cw / 2, y: Y(g[i]) - ch / 2, width: cw + 0.6, height: ch + 0.6, fill: seqColor((v - vmin) / (vmax - vmin || 1)) })); }));
+  for (const lev of ticks(vmin, vmax, 6).filter((l) => l > vmin && l < vmax)) {          // iso-regret lines (marching squares)
+    let d = "", labelAt = null;
+    for (let i = 0; i < n - 1; i++) for (let j = 0; j < n - 1; j++) {
+      const c = [map.val[i][j], map.val[i][j + 1], map.val[i + 1][j + 1], map.val[i + 1][j]]; if (c.some((v) => !Number.isFinite(v))) continue;
+      const pts = [[g[j], g[i]], [g[j + 1], g[i]], [g[j + 1], g[i + 1]], [g[j], g[i + 1]]], cross = [];
+      for (let e = 0; e < 4; e++) { const a = c[e], b = c[(e + 1) % 4]; if ((a < lev) !== (b < lev)) { const f = (lev - a) / (b - a), p = pts[e], q = pts[(e + 1) % 4]; cross.push([p[0] + f * (q[0] - p[0]), p[1] + f * (q[1] - p[1])]); } }
+      for (let k = 0; k + 1 < cross.length; k += 2) { d += `M${X(cross[k][0]).toFixed(1)},${Y(cross[k][1]).toFixed(1)}L${X(cross[k + 1][0]).toFixed(1)},${Y(cross[k + 1][1]).toFixed(1)}`; if (!labelAt || cross[k][0] > labelAt[0]) labelAt = cross[k]; }
+    }
+    if (d) { svg.append(sv("path", { d, stroke: "rgba(255,255,255,.75)", "stroke-width": 1, fill: "none" }));
+      if (labelAt) { const t = sv("text", { x: X(labelAt[0]) - 4, y: Y(labelAt[1]) - 3, class: "isolab", "text-anchor": "end" }); t.textContent = +lev.toPrecision(3); svg.append(t); } }
+  }
+  for (const v of ticks(lo, hi, 6)) {
+    const t1 = sv("text", { x: X(v), y: S - m.b + 16, class: "tick", "text-anchor": "middle" }); t1.textContent = v; svg.append(t1);
+    const t2 = sv("text", { x: m.l - 6, y: Y(v) + 4, class: "tick", "text-anchor": "end" }); t2.textContent = v; svg.append(t2);
+  }
+  const xl = sv("text", { x: (m.l + S - m.r) / 2, y: S - 6, class: "lab", "text-anchor": "middle" }); xl.textContent = "degrees toward the starting weights"; svg.append(xl);
+  const yl = sv("text", { x: 12, y: (m.t + S - m.b) / 2, class: "lab", "text-anchor": "middle", transform: `rotate(-90 12 ${(m.t + S - m.b) / 2})` }); yl.textContent = "degrees along the paths' other main direction"; svg.append(yl);
+  runs.forEach((r, k) => {
+    const p = map.paths[k]; svg.append(sv("path", { d: p.map((q, i) => `${i ? "L" : "M"}${X(q[0]).toFixed(1)},${Y(q[1]).toFixed(1)}`).join(""), fill: "none", stroke: r.color, "stroke-width": 2.5, "stroke-dasharray": r.dash ? "6 4" : "none", "stroke-linejoin": "round" }));
+    svg.append(sv("circle", { cx: X(p[p.length - 1][0]), cy: Y(p[p.length - 1][1]), r: 5, fill: r.color, stroke: "#fff", "stroke-width": 1.5 }));
+  });
+  const s0 = map.paths[0][0]; svg.append(sv("circle", { cx: X(s0[0]), cy: Y(s0[1]), r: 7, fill: "#fff", stroke: "var(--text)", "stroke-width": 2 }));
+  const st = sv("text", { x: X(s0[0]) + 10, y: Y(s0[1]) - 8, class: "maplab" }); st.textContent = "start"; svg.append(st);
+  svg.append(sv("path", { d: `M${X(0) - 7},${Y(0) - 7}L${X(0) + 7},${Y(0) + 7}M${X(0) - 7},${Y(0) + 7}L${X(0) + 7},${Y(0) - 7}`, stroke: "var(--text)", "stroke-width": 2.5 }));
+  const tt = sv("text", { x: X(0) + 10, y: Y(0) + 16, class: "maplab" }); tt.textContent = "true weights"; svg.append(tt);
+  const scale = h("div", { class: "scale" }, h("span", {}, fmt(vmin)), h("span", { class: "ramp", style: `background:linear-gradient(90deg,${SEQ.join(",")})` }), h("span", {}, fmt(vmax)), h("span", { class: "sub" }, " regret per cargo of the plans each objective recommends"));
+  return h("div", { class: "mapwrap" }, h("div", { class: "legend" }, ...runs.map((r) => h("span", { class: "li" }, h("span", { class: "sw" + (r.dash ? " dash" : ""), style: `--c:${r.color}` }), r.name)),
+    h("span", { class: "li" }, "○ start (shared)"), h("span", { class: "li" }, "× true weights"), h("span", { class: "li" }, "● end")), svg, scale);
+}
+
+function mapPanel(R) {
+  const mk = (arr, f = (x) => x) => h("select", {}, ...arr.map((x) => h("option", { value: x }, f(x))));
+  const eSel = mk(R.rc.etas, etaName), rSel = mk(R.rc.r_values, (x) => `r = ${x}`), kSel = mk(R.rc.k_values, (x) => `k = ${x}`), repSel = mk([...Array(R.v.reps).keys()], (x) => `replicate ${x}`);
+  rSel.value = R.rc.r_values[Math.min(2, R.rc.r_values.length - 1)]; kSel.value = R.rc.k_values[R.rc.k_values.length - 1];
+  const slot = h("div"), st = h("div", { class: "status" }), wt = h("div");
+  const go = h("button", { class: "primary", onclick: async () => {
+    const rep = +repSel.value, e = +eSel.value, find = (s, hh) => R.loops.find((r) => r.setup === s && r.h === hh && r.eta === e && r.rep === rep);
+    const a = find("A", +rSel.value), b = find("B", +kSel.value); if (!a || !b) return;
+    go.disabled = true; st.textContent = "computing the map (about a thousand objectives, each solved on 20 months)…";
+    const wc = configs({ ...R.v, seed: R.v.seed + rep }).wc;
+    try {
+      const [map] = await runJobs([{ kind: "map", wc, paths: [a.path, b.path] }], 1);
+      slot.replaceChildren(mapChart(map, [{ name: `Setup A, r = ${a.h}`, color: "var(--s1)" }, { name: `Setup B, k = ${b.h}`, color: "var(--s2)" }]));
+      wt.replaceChildren(h("h3", {}, "Weights at the start and the end, compared with the truth"),
+        table(["feature", "unit", "start (shared)", `end, A (r = ${a.h})`, `end, B (k = ${b.h})`, "true weight"], FEAT.map((f, k) => [f[1], f[3], a.start[k], a.end[k], b.end[k], a.truth[k]])),
+        h("p", { class: "note" }, "Per natural unit of each feature, in cost units. The machine's weights are kept at the truth's overall cost spread, so they are directly comparable with the true weights."));
+      st.textContent = "";
+    } catch (err) { st.textContent = "Error: " + err.message; }
+    go.disabled = false;
+  } }, "Draw the map");
+  setTimeout(() => go.click(), 0);
+  return h("section", {}, h("h2", {}, "Objective space: how the machine's weights converge"),
+    h("p", { class: "lede" }, "Each point is a set of weights (only directions matter: doubling every weight changes no decision). The centre is the true weights; distance from the centre = angle to them in degrees. Colour = regret of the plans those weights recommend. Both runs start from the same weights."),
+    h("div", { class: "row" }, eSel, rSel, kSel, repSel, go), st, h("div", { class: "mapgrid" }, slot, wt));
+}
+
+function renderResults() {
+  const out = $("#results"); if (!R) return;
+  const sr = R.loops.filter((r) => r.rep === 0)[0];
+  out.replaceChildren(
+    h("p", { class: "lede" }, `${R.v.reps} replicate(s). Starting weights: the first ${R.v.n_known} of the 11 true features at wrong weights, the other ${11 - R.v.n_known} at 0, the wrong feature at ${R.v.proxy0}; starting regret asked ${R.v.start_regret}, achieved ${fmt(sr.start_regret)} (lowest possible ${fmt(sr.start_lowest)}) in replicate 0. Every run of a replicate starts from these same weights and shares the same random numbers.`),
+    h("div", { class: "row" }, h("button", { class: "ghost", onclick: () => download("fixed_proposal.csv", toCSV(R.fixed)) }, "download fixed_proposal.csv"),
+      h("button", { class: "ghost", onclick: () => download("loops.csv", toCSV(R.loops.map((r) => ({ setup: r.setup, h: r.h, eta: r.eta, rep: r.rep, heldout_final: r.final, ...r.avg })))) }, "download loops.csv"),
+      h("button", { class: "ghost", onclick: () => download("convergence_curves.csv", toCSV(R.loops.flatMap((r) => r.held.map((v, t) => ({ setup: r.setup, h: r.h, eta: r.eta, rep: r.rep, month: t, heldout_regret: v, weight_angle_deg: r.dist[t] }))))) }, "download convergence_curves.csv")),
+    setupPanels(R, "A"), setupPanels(R, "B"), convergencePanel(R), monthsPanel(R), mapPanel(R), measuresPanel(R));
+}
+
+async function runAll() {
+  const st = $("#status"), errs = problems(vals);
+  if (errs.length) { st.className = "status err"; st.textContent = "Cannot run: " + errs.join("; ") + "."; return; }
+  const v = { ...vals }, jobs = [];
+  for (let rep = 0; rep < v.reps; rep++) {
+    const { wc, rc } = configs({ ...v, seed: v.seed + rep, run_seed: v.run_seed + rep });
+    for (const setup of ["A", "B"]) jobs.push({ kind: "fixed", wc, rc, setup, rep });
+    for (const setup of ["A", "B"]) for (const hh of setup === "A" ? rc.r_values : rc.k_values) for (const eta of rc.etas) jobs.push({ kind: "loop", wc, rc, setup, h: hh, eta, rep });
+  }
+  const btn = $("#go"); btn.disabled = true; showTab("results");
+  const bar = h("progress", { max: 1, value: 0 }), txt = h("span"); st.className = "status"; st.replaceChildren(bar, txt);
+  const t0 = Date.now();
+  try {
+    const out = await runJobs(jobs, v.workers, (f, d) => { bar.value = f; txt.textContent = ` ${d} of ${jobs.length} runs · ${((Date.now() - t0) / 1000).toFixed(0)} s`; });
+    const { rc } = configs(v);
+    R = { v, wc: configs(v).wc, rc, fixed: out.filter((o, i) => jobs[i].kind === "fixed").flat(), loops: out.map((o, i) => (jobs[i].kind === "loop" ? { ...o, rep: jobs[i].rep } : null)).filter(Boolean) };
+    st.textContent = `${jobs.length} runs in ${((Date.now() - t0) / 1000).toFixed(1)} s` + (workersOK ? "" : " (on this page: the browser does not allow background workers for local files)");
+    renderResults(); stale();
+  } catch (e) { st.className = "status err"; st.textContent = "Error: " + e.message; }
+  btn.disabled = false;
+}
+function stale() { const n = $("#stale"); n.hidden = !R || JSON.stringify(R.v) === JSON.stringify(vals); }
+
+// ---------- page ----------
+function buildSidebar() {
+  const sb = $("#params"); sb.replaceChildren();
+  SIDEBAR.forEach(([title, open, ks]) => sb.append(h("details", { class: "box", open }, h("summary", {}, title), ...ks.map((k) => field(k, stale)))));
+}
+function buildWorldPage() {
+  const root = $("#world"); root.replaceChildren(h("p", { class: "lede" }, "Settings of the simulated world: what the planner truly wants, the special cargo, and the size and shape of each month."));
+  for (const [title, ks] of WORLD_PAGE) root.append(h("section", { class: "card" }, h("h3", {}, title), h("div", { class: "cols3" }, ...ks.map((k) => field(k, stale)))));
+}
+function showTab(id) {
+  document.querySelectorAll(".tabs button").forEach((b) => b.setAttribute("aria-selected", b.dataset.tab === id));
+  document.querySelectorAll(".tab").forEach((t) => { t.hidden = t.id !== "tab-" + id; });
+  if (id === "formulation") fillFeatureWeights();
+}
+function fillFeatureWeights() {
+  const nat = { urgent_waiting_beyond: [vals.urgent_wait_weight, "per extra day"], long_ballast: [vals.ballast_weight, "per (1000 nm)²"], special_on_basic: [vals.trap_penalty, "per cargo"] };
+  document.querySelectorAll("[data-w]").forEach((c) => { const [v, u] = nat[c.dataset.w]; c.textContent = `${fmt(v, 3)} ${u}`; });
+  document.querySelectorAll("[data-v]").forEach((c) => { c.textContent = fmt(vals[c.dataset.v], 2); });
+}
+document.addEventListener("DOMContentLoaded", () => {
+  buildSidebar(); buildWorldPage();
+  document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
+  $("#go").addEventListener("click", runAll);
+  showTab("results");
+  if (window.renderMathInElement) renderMathInElement($("#tab-formulation"), { delimiters: [{ left: "$$", right: "$$", display: true }, { left: "$", right: "$", display: false }] });
+  else $("#mathnote").hidden = false;
+});
+
+</script>
+</body>
+</html>

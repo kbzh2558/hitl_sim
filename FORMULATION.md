@@ -1,164 +1,152 @@
-# Simulation World: Formulation and Assumptions
+# Formulation: two interfaces, one human model
 
-The goal is to simulate how a machine learns a human planner's true preferences from their corrections, when the machine's own proposals influence the human's responses.
+We study how decision freedom increases the best available improvement but may reduce the probability that a capacity-limited human selects it, and how this affects online preference learning.
 
-## 1. The true preference model
+## 1. Assignment problem and machine proposal
 
-Each month $t$, cargoes must be assigned to feasible ships. The set of feasible assignments is $X_t$.
+In month $t$, let $I_t$ and $J_t$ be the cargoes and ships, and $X_t$ the feasible binary assignments. $x_{ij}=1$ means cargo $i$ is assigned to ship $j$. Every cargo is assigned once, each ship at most once, subject to compatibility constraints.
 
-The human has a fixed true objective:
-
-$$
-\boxed{F_t^\star(x)=c^{\star\top}d_t(x)+b^{\star\top}g_t(x)}
-$$
-
-where:
-
-| Notation | Meaning | Example |
-|---|---|---|
-| $x$ | A complete cargo–ship assignment | Which ship carries each cargo |
-| $d_t(x)$ | Known, human-understandable preference features | Waiting days, sailing cost, destination match, ship capacity |
-| $c^\star$ | True weights on the known features | How important waiting is relative to sailing cost |
-| $g_t(x)$ | Unknown nonlinear preference features | Extra penalty when special cargo is assigned to a basic-service ship |
-| $b^\star$ | True weights on the unknown features | How strongly the planner dislikes that combination |
-
-**Important:** The machine is given $d$, but not $c^\star$, $b^\star$, or $g$.
-
-The unknown features $g$ are nonlinear relationships constructed from the information already available in $d$.
-
-For example, suppose $d$ includes the indicators *special cargo* and *basic ship*. One unknown feature might be:
+Each match $(i,j)$ has a known feature vector $\phi_{tij}$. The current simulator uses an additive objective (feature values may be nonlinear functions of match attributes):
 
 $$
-g_1(x)=\sum_{i,j}\underbrace{\mathbf{1}\{\text{special cargo } i\}}_{\text{known attribute}}\;\underbrace{\mathbf{1}\{\text{basic ship } j\}}_{\text{known attribute}}\;x_{ij}.\rule[-22pt]{0pt}{0pt}
+\phi_t(x)=\sum_{i,j}x_{ij}\phi_{tij},\qquad
+F_t^\star(x)=c^{\star\top}\phi_t(x)=\sum_{i,j}x_{ij}w_{tij}^\star,
+\qquad w_{tij}^\star=c^{\star\top}\phi_{tij}.
 $$
 
-The machine knows which cargoes are special and which ships are basic, but does not know that their combination has an additional preference cost.
+The human knows the fixed true weights $c^\star$; the machine estimates them as $\widehat c_t$. The global true optimum and machine proposal are
+
+$$
+x_t^\star=\arg\min_{x\in X_t}F_t^\star(x),\qquad
+\boxed{q_t=\arg\min_{x\in X_t}\widehat c_t^\top\phi_t(x).}
+$$
 
 <!-- FEATURES -->
 
-Here, we construct nonlinear features from the attributes of individual cargo–ship matches and then add them across the complete assignment. This preserves the assignment structure.
+## 2. Available decisions
 
-The true optimal decision is:
+Let $S_t$ be the decision set offered by the active interface, always containing $q_t$.
 
-$$
-\boxed{x_t^\star=\arg\min_{x\in X_t}F_t^\star(x).}
-$$
-
-**Assumptions:** The true weights and preference relationships remain stable across months. The human knows them perfectly. Hard feasibility constraints are known and never learned.
-
-## 2. The machine's model and proposal
-
-The machine starts with an incomplete understanding of the human's preferences:
+**A — Modify.** The human may reassign at most $r$ cargoes relative to $q_t$:
 
 $$
-\boxed{\hat F_t(x)=\hat c_t^\top d_t(x)+\hat b_t^\top\hat g_{\omega_t}(x)}
+\boxed{S_t^A(r)=\{x\in X_t:D(x,q_t)\le r\},}
 $$
 
-Here:
+where $D(x,q_t)$ counts cargoes assigned to different ships. The simulator optimizes over this radius-constrained set; it does not model a separate search failure.
 
-- $\hat c_t$ is the machine's current estimate of the familiar-feature weights.
-- $\hat g_{\omega_t}$ is a small neural network that tries to learn the missing nonlinear preference features from $d$.
-- $\hat b_t$ weights those learned features.
-
-Initially, both the familiar-feature weights and the unknown preference relationships can be incorrect.
-
-Under pure exploitation, the machine recommends:
+**B — Choose.** Let $\widehat F_t(x)=\widehat c_t^\top\phi_t(x)$ and define the machine's near-optimal region
 
 $$
-\boxed{q_t=\arg\min_{x\in X_t}\hat F_t(x).}
+\mathcal N_t(\varepsilon)=\{x\in X_t:\widehat F_t(x)\le\widehat F_t(q_t)+\varepsilon\}.
 $$
 
-It chooses the best feasible plan according to its current model, which may differ from the human's true optimum.
-
-**Assumption:** The machine does not know how its model differs from the true objective.
-
-## 3. How the human responds to the proposal
-
-The human knows $F^\star$, but seeing $q_t$ temporarily changes the importance they place on different attributes.
-
-Let
+The machine offers $q_t$ and $k-1$ distinct alternatives sampled without replacement from a retained solution pool in $\mathcal N_t(\varepsilon)$:
 
 $$
-f_t(x)=\begin{bmatrix}d_t(x)\\ g_t(x)\end{bmatrix},\qquad w^\star=\begin{bmatrix}c^\star\\ b^\star\end{bmatrix}.
+\boxed{S_t^B(k)=\{q_t,q_t^2,\ldots,q_t^k\}.}
 $$
 
-Thus $f_{tr}(x)$ means the total value of preference feature $r$ in assignment $x$. This includes both familiar and nonlinear preference features.
+The pool may be capped at $K_{\max}$; sampling is uniform over that retained pool. Menus are nested for different $k$ at the same month and machine state.
 
-For example:
-
-- $f_{t1}(x)$: total waiting cost across all assigned cargoes.
-- $f_{t2}(x)$: total sailing cost.
-- $f_{tr}(x)$: number of special cargoes assigned to basic ships, for the relevant nonlinear feature.
-
-For each feature, the simulator compares the machine's proposal against typical feasible plans from the same month:
+For either interface, the best available assignment is
 
 $$
-\boxed{s_{tr}(q_t)=\operatorname{clip}\!\left(\frac{\overline{f}_{tr}-f_{tr}(q_t)}{\operatorname{sd}(f_{tr})},\,-3,\,3\right).}
+\boxed{z_t=\arg\min_{x\in S_t}F_t^\star(x).}
 $$
 
-Here $\overline{f}_{tr}$ and $\operatorname{sd}(f_{tr})$ are the mean and standard deviation of feature $r$ among 50 reference plans generated for that month. A feature with zero reference variation receives $s_{tr}=0$.
+This is a simulator benchmark, not the human's observed response. At fixed machine state, expanding either nested decision set cannot worsen the true cost of $z_t$.
 
-If a proposal is unusually good on sailing cost, its sailing-cost score $s_{tr}(q_t)$ is positive.
+## 3. Human response: one noisy-cost assumption
 
-The human then temporarily increases the importance of that attribute:
-
-$$
-\boxed{F_t^H(x\mid q_t)=\sum_r w_r^\star\,e^{\lambda s_{tr}(q_t)}\,f_{tr}(x).}
-$$
-
-Here $\lambda$ is the only behavioral-strength parameter:
-
-- $\lambda=0$: No anchoring; human uses the true objective.
-- $\lambda>0$: The proposal changes how the human weighs tradeoffs.
-- Larger $\lambda$: Stronger proposal influence.
-
-The human returns:
+**Workload.** Let $U_t$ count distinct match costs whose selection can vary within $S_t$:
 
 $$
-\boxed{x_t^H=\arg\min_{\substack{x\in X_t\\ F_t^\star(x)\le F_t^\star(q_t)}}F_t^H(x\mid q_t).}
+\boxed{U_t=\left|\{(i,j):\exists x,y\in S_t,\ x_{ij}\ne y_{ij}\}\right|.}
 $$
 
-This means the human considers the full feasible set, but never returns a plan worse than the proposal under the true objective.
+In A, this counts matches exposed by the radius-constrained neighborhood; in B, matches varying across menu plans. Shared match costs are counted once.
 
-**Assumptions:** The human makes no random mistakes, knows the true preferences, and always solves their temporarily tilted decision problem exactly. The proposal affects their attention, not their underlying $c^\star$, $b^\star$, $g$.
-
-## 4. How the machine learns
-
-The machine observes the proposed assignment and the human's response:
+**Evaluation.** Let $B>0$ be human evaluation capacity, and $s_t$ the standard deviation of true match costs over feasible matches in month $t$. The human perceives each match cost as
 
 $$
-(q_t,\,x_t^H).
+\boxed{\widetilde w_{tij}=w_{tij}^\star+s_t\sqrt{\frac{U_t}{B}}\,\xi_{tij},\qquad
+\xi_{tij}\overset{\mathrm{iid}}{\sim}\mathcal N(0,1).}
 $$
 
-It does not know the human's temporary attention weights or $\lambda$. Instead, it assumes that $x_t^H$ is optimal under the human's stable preferences.
+Noise is drawn once per match per month and reused across assignments. The human knows $c^\star$ but imperfectly evaluates its costs; greater workload increases noise and greater capacity reduces it.
 
-The machine learns its objective by minimizing a structured margin loss:
-
-$$
-\boxed{\mathcal{L}_t(\theta)=\max_{x\in X_t}\left[\hat F_\theta(x_t^H)-\hat F_\theta(x)+\mu\,\Delta(x_t^H,x)\right]}
-$$
-
-where:
-
-| Notation | Meaning |
-|---|---|
-| $\theta=(\hat c,\hat b,\omega)$ | Parameters of the machine's learned objective |
-| $\hat F_\theta(x)$ | Predicted cost of assignment $x$, using known features and learned nonlinear features |
-| $x_t^H$ | Assignment returned by the human |
-| $x\in X_t$ | Any alternative feasible assignment |
-| $\Delta(x_t^H,x)$ | Number of cargo assignments that differ between $x_t^H$ and $x$ |
-| $\mu$ | Margin strength, encouraging the human's assignment to rank sufficiently better than alternatives |
-
-**Interpretation:** The loss penalizes the machine whenever another feasible assignment looks better than the human's assignment, or is not sufficiently worse given how different it is.
-
-After each month, the machine updates its parameters using the accumulated observations:
+**Response.** Both interfaces use the same perceived objective and rule:
 
 $$
-\boxed{\theta_t=\arg\min_\theta\left[\sum_{s=1}^{t}\mathcal{L}_s(\theta)+\gamma\,\Omega(\theta)\right]}
+\widetilde F_t(x)=\sum_{i,j}x_{ij}\widetilde w_{tij},\qquad
+\boxed{x_t^H=\arg\min_{x\in S_t}\widetilde F_t(x).}
 $$
 
-where $\Omega(\theta)$ regularizes model complexity and $\gamma$ controls its strength.
+Thus A optimizes within the radius under perceived costs, while B selects the least-cost perceived menu plan. Ties follow a fixed rule favoring $q_t$.
 
-**The problem:** The human selected $x_t^H$ under the proposal-dependent objective $F_t^H(\cdot\mid q_t)$, not necessarily the true objective $F_t^\star$. The machine nevertheless tries to make $x_t^H$ globally optimal under a single stable learned objective.
+**Boundary cases.** $B=\infty$ gives $x_t^H=z_t$; $B=0$ means no human evaluation and returns $q_t$ (not the limit as $B\downarrow0$). Random-response runs ignore true costs and provide a negative control.
 
-**Assumption:** The learner treats human corrections as globally optimal demonstrations, without accounting for proposal-dependent attention. Consequently, even genuinely improving corrections can introduce systematic errors into the learned preferences.
+**Probability of correct execution.** Conditional on the month, machine state and $S_t$,
+
+$$
+\boxed{P_t(B)=\Pr\left(F_t^\star(x_t^H)=F_t^\star(z_t)\right).}
+$$
+
+This probability is generated by the noisy-cost model, not separately specified. The experiments examine how it changes with $r$, $k$ and $B$; strict monotonicity is not imposed for every instance.
+
+**Robustness workload.** An alternative, optimistic definition counts only match indicators that differ between $q_t$ and $z_t$. It uses oracle information and is therefore a sensitivity test, not the default behavioral assumption.
+
+## 4. Opportunity and execution error
+
+With the active decision set $S_t$ and its true optimum $z_t$, define
+
+$$
+\begin{aligned}
+\underbrace{V_t}_{\text{available improvement}}&=F_t^\star(q_t)-F_t^\star(z_t),\\
+\underbrace{E_t}_{\text{execution error}}&=F_t^\star(x_t^H)-F_t^\star(z_t),\\
+\underbrace{G_t}_{\text{realized improvement}}&=F_t^\star(q_t)-F_t^\star(x_t^H)=V_t-E_t.
+\end{aligned}
+$$
+
+The remaining restriction error relative to the global optimum is $O_t=F_t^\star(z_t)-F_t^\star(x_t^\star)$, so
+
+$$
+\boxed{F_t^\star(x_t^H)-F_t^\star(x_t^\star)=O_t+E_t.}
+$$
+
+Conditioning on the fixed decision set and machine state, the probability–severity decomposition is
+
+$$
+\boxed{\mathbb E[G_t]=V_t-[1-P_t(B)]\,\mathbb E[E_t\mid E_t>0].}
+$$
+
+The conditional error is taken as zero when execution is always optimal. A lower $P_t(B)$ need not reduce realized improvement if mistakes are inexpensive.
+
+## 5. Machine learning
+
+Both interfaces use the existing structured inverse-optimization loss:
+
+$$
+\boxed{\ell_t(c)=\max_{x\in X_t}\left[c^\top\bigl(\phi_t(x_t^H)-\phi_t(x)\bigr)+\mu D(x_t^H,x)\right],\qquad \mu=0\text{ by default}.}
+$$
+
+After month $t$, the machine approximately minimizes $\sum_{s=1}^t\ell_s(c)$ using the existing Adam refit and fixed weight rescaling.
+
+Define the observed feature difference
+
+$$
+g_t=\phi_t(x_t^H)-\phi_t(q_t).
+$$
+
+Since $q_t$ minimizes the machine's objective, $\widehat c_t^\top g_t\ge0$, giving
+
+$$
+\boxed{(\widehat c_t-c^\star)^\top g_t\ge F_t^\star(q_t)-F_t^\star(x_t^H)=G_t.}
+$$
+
+This relates realized improvement to learning-signal alignment; it is not a convergence theorem. The main learning outcome is held-out true decision regret after $T$ months, tracked over time and against random-response/no-response controls.
+
+## Research question
+
+How does decision freedom change attainable improvement, execution reliability, and the resulting rate of online preference learning? We vary $r$ in A and $k$ in B under the same human evaluation assumption and machine learner.

@@ -1,334 +1,231 @@
-"""Plotly figures.  Regret is per cargo in true-cost units (1 = true cost change of one typical small reassignment).
-Scores are prequential: month t's value is for the plan the model recommends in month t, before the human responds.
-Every figure shows the learner and the oracle baseline (all true terms available, shown x* every month)."""
+"""Plotly figures.  Regret and improvements are per cargo in cost units (1 = the cost change of one typical small
+reassignment)."""
 import numpy as np
-import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
-from .config import LABELS
+from .sweep import CTRL
+from .setups import RANDOM, NO_RESPONSE
 
-BLUE, RED, GREY, ORANGE, GREEN, PURPLE = "#2a6fdb", "#c8414b", "#6b7280", "#e07a1f", "#2e9e6a", "#7b4fd6"
-LAYOUT = dict(template="plotly_white", margin=dict(l=60, r=20, t=50, b=50), legend=dict(orientation="h", y=-0.22))
-ORACLE = "oracle baseline (all true terms, shown x*)"
-
-
-def smooth(y, w):
-    """Trailing average of the last w values (each point uses only months up to that point)."""
-    return pd.Series(np.asarray(y, dtype=float)).rolling(max(1, int(w)), min_periods=1).mean().values
+PAL = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"]
+GREY, INK = "#8a8984", "#52514e"
+ORC = "r = ∞ reference: the human returns the true best plan overall"
+ORC_LINE = dict(color="#111111", dash="dashdot", width=2)
 
 
-def _two_lines(res, key, w, title, ytitle, zero=True):
-    L = [e[key] for e in res["evals"]]; O = [e[key] for e in res["oracle"]]; x = np.arange(len(L))
-    f = go.Figure()
-    f.add_scatter(x=x, y=L, mode="lines", name="learner, each month", line=dict(color=BLUE, width=1), opacity=0.3)
-    f.add_scatter(x=x, y=smooth(L, w), mode="lines", name="learner, average of last %d months" % w, line=dict(color=BLUE, width=3))
-    f.add_scatter(x=x, y=O, mode="lines", name="oracle, each month", line=dict(color=RED, width=1), opacity=0.25)
-    f.add_scatter(x=x, y=smooth(O, w), mode="lines", name=ORACLE + ", same smoothing", line=dict(color=RED, width=2.5, dash="dash"))
-    f.update_layout(title=title, xaxis_title="month", yaxis_title=ytitle, **LAYOUT)
-    if zero:
-        f.update_yaxes(rangemode="tozero")
+def _oracle(loops):
+    return [o for o in loops if o["setup"] == "O"]
+LAYOUT = dict(template="plotly_white", font=dict(size=13), margin=dict(l=60, r=20, t=70, b=60),
+              legend=dict(orientation="h", y=-0.16, x=0), hovermode="x unified")
+
+
+def b_name(b):
+    if b == RANDOM:
+        return "random response (control)"
+    if b == NO_RESPONSE:
+        return "B = 0 (no response: keeps the machine's plan)"
+    return "B = ∞ (exact evaluation)" if np.isinf(b) else "B = %g" % b
+
+
+def b_line(rc, b):
+    if b == RANDOM:
+        return dict(color=GREY, dash="dash", width=2)
+    if b == NO_RESPONSE:
+        return dict(color=GREY, dash="dot", width=2)
+    real = [x for x in rc.budgets if x not in (RANDOM, NO_RESPONSE)]
+    return dict(color=PAL[real.index(b) % 8], width=2.5)
+
+
+def _top_legend(f, height, t=110):
+    f.update_layout(height=height, **{**LAYOUT, "hovermode": "x", "margin": dict(l=60, r=20, t=t, b=50),
+                                      "legend": dict(orientation="h", x=0, y=1.0 + 30 / height * 3, yanchor="bottom")})
+
+
+def setup_panels(rc, fixed, loops, setup):
+    """Opportunity, execution reliability, realized improvement (fixed proposal) and held-out regret after learning
+    (closed-loop runs), one line per human capacity B."""
+    hs = list(rc.r_values if setup == "A" else rc.k_values); xl = "revision radius r" if setup == "A" else "plans shown k"
+    F = fixed[fixed.setup == setup]; x = [str(h) for h in hs]
+    f = make_subplots(rows=2, cols=2, horizontal_spacing=0.09, vertical_spacing=0.17,
+                      subplot_titles=("Opportunity V: best available improvement", "Reliability: P(human selects the best available plan)",
+                                      "Realized improvement G = V − E", "After learning: held-out machine regret"))
+    for e in rc.budgets:
+        g = F[F.B == e].groupby("h").mean(numeric_only=True).reindex(hs); st = b_line(rc, e)
+        fin = [np.mean([o["final"] for o in loops if o["setup"] == setup and o["h"] == h and o["B"] == e]) for h in hs]
+        for (row, col), y in zip(((1, 1), (1, 2), (2, 1), (2, 2)), (g.V, g.best, g.G, fin)):
+            if (row, col) == (1, 1) and e != rc.budgets[0]:
+                continue                                    # V does not depend on B: draw it once
+            f.add_scatter(x=x, y=y, mode="lines+markers", line=st if (row, col) != (1, 1) else dict(color=INK, width=2.5), marker=dict(size=7),
+                          name=b_name(e) if (row, col) != (1, 1) else "V (same for every B)", legendgroup=str(e) if (row, col) != (1, 1) else "V",
+                          showlegend=(row, col) in ((1, 1), (2, 1)), row=row, col=col, hovertemplate="%{y:.3f}")
+    O = _oracle(loops)
+    if O:
+        Rm = F.R.mean()
+        for (row, col), y in zip(((1, 1), (1, 2), (2, 1), (2, 2)), (Rm, 1.0, Rm, np.mean([o["final"] for o in O]))):
+            f.add_scatter(x=x, y=[y] * len(x), mode="lines", line=ORC_LINE, name=ORC, legendgroup="orc", showlegend=(row, col) == (1, 1),
+                          row=row, col=col, hovertemplate="%{y:.3f}")
+    start = np.mean([o["held"][0] for o in loops if o["setup"] == setup])
+    f.add_hline(y=start, line=dict(color=GREY, width=1, dash="dot"), annotation_text="before learning %.3f" % start,
+                annotation_position="bottom right", annotation_font=dict(color=INK, size=11), row=2, col=2)
+    for r_ in (1, 2):
+        for c_ in (1, 2):
+            f.update_xaxes(title_text=xl, type="category", row=r_, col=c_)
+            f.update_yaxes(title_text={(1, 2): "probability", (2, 2): "regret per cargo"}.get((r_, c_), "per cargo"),
+                           zeroline=True, zerolinecolor="#cfcfca", row=r_, col=c_)
+    f.update_yaxes(range=[0, 1.04], row=1, col=2)
+    _top_legend(f, 780, 120)
     return f
 
 
-def curve(res, w):
-    return _two_lines(res, "regret", w, "Regret of the recommended plan each month (scored before the human responds)", "regret per cargo")
-
-
-def match_curve(res, w):
-    f = _two_lines(res, "match", w, "Match with the true optimum x* (share of cargoes assigned as in x*)", "match with x*")
-    f.update_yaxes(range=[0, 1.02])
-    return f
-
-
-def special_curve(res, w):
-    """How many more special cargoes per cargo the recommended plan puts on basic ships (T) and on mismatched ships
-    (P) than the true optimum does."""
-    f = go.Figure(); x = np.arange(len(res["evals"]))
-    for key, nm, dash in (("special_basic", "special cargo on basic ships (above 0: real dislike not learned)", None),
-                          ("special_mismatch", "special cargo going elsewhere (below 0: still follows the wrong belief)", "dot")):
-        for src, col, who in ((res["evals"], BLUE, "learner"), (res["oracle"], RED, "oracle")):
-            f.add_scatter(x=x, y=smooth([e[key] for e in src], w), mode="lines", name="%s: %s" % (who, nm),
-                          line=dict(color=col, width=3 if who == "learner" else 2, dash=dash))
-    f.add_hline(y=0, line=dict(color=GREY, width=1))
-    f.update_layout(title="Special cargo placement vs the best plan (average of last %d months)" % w,
-                    xaxis_title="month", yaxis_title="mismatch with the best plan (per cargo)", **LAYOUT)
-    return f
-
-
-def info_curve(res):
-    """Quality of the feedback collected so far: correlation of the changes in T and P across every comparison the
-    learner has received (1 = truth and proxy indistinguishable), and the share where they differ."""
-    M = res["months"]; x = np.arange(len(M))
-    f = go.Figure()
-    f.add_scatter(x=x, y=[m["info_corr"] for m in M], mode="lines", line=dict(color=PURPLE, width=3),
-                  name="how closely the two counts move together (1 = reasons can't be told apart, 0 = clearly apart)")
-    f.add_scatter(x=x, y=[m["info_disagree"] for m in M], mode="lines", line=dict(color=GREEN, width=2.5, dash="dot"),
-                  name="share of feedback where the two counts differ")
-    f.update_layout(title="Can the feedback tell the true reason from the wrong one?", xaxis_title="month",
-                    yaxis_title="value", yaxis_range=[-1.02, 1.02], **LAYOUT)
-    return f
-
-
-def proxy_curve(res, w):
-    """What the learner has attributed the special cargo's moves to, in true-cost units: its weight on the proxy P and
-    its learned extra cost of a basic ship for special vs ordinary cargo (the true reason T, truth = pi / 0)."""
-    Rc = res["recovery"]; x = np.arange(1, len(Rc) + 1)
-    f = go.Figure()
-    f.add_scatter(x=x, y=[r["proxy_weight"] for r in Rc], mode="lines", line=dict(color=ORANGE, width=3),
-                  name="weight on the wrong reason (truth 0)")
-    f.add_scatter(x=x, y=[r["pen_special"] for r in Rc], mode="lines", line=dict(color=BLUE, width=3),
-                  name="extra cost of a basic ship, special cargo (truth π)")
-    f.add_scatter(x=x, y=[r["pen_ordinary"] for r in Rc], mode="lines", line=dict(color=BLUE, width=1.5, dash="dot"),
-                  name="same, ordinary cargo (truth 0)")
-    f.add_hline(y=0, line=dict(color=GREY, width=1, dash="dash"))
-    f.update_layout(title="Which reason has the learner adopted?", xaxis_title="month",
-                    yaxis_title="value", **LAYOUT)
-    return f
-
-
-def hidden_curve(res, w):
-    f = _two_lines(res, "hidden_regret", w, "Extra hidden cost of the recommended plan vs the best plan",
-                   "per cargo (0 = same as best plan)", zero=False)
-    f.add_hline(y=0, line=dict(color=GREY, width=1))
-    return f
-
-
-def _chart(v, c, u1, u2):
-    """Azimuthal map of a direction: distance from the centre = angle to c (degrees), bearing from (u1, u2); also the
-    angle lost off the map plane."""
-    v = v / np.linalg.norm(v); rad = np.degrees(np.arccos(np.clip(v @ c, -1, 1)))
-    p = np.array([v @ u1, v @ u2]); inpl = np.hypot(*p); s = np.sqrt(max(1 - (v @ c) ** 2, 0))
-    d = p / inpl if inpl > 1e-12 else np.zeros(2)
-    return rad * d, (np.degrees(np.arccos(np.clip(inpl / s, -1, 1))) if s > 1e-12 else 0.0)
-
-
-def param_contour(res, grid=31):
-    """Objective space.  Every model is written as weights on the 10 true terms (the learner: the weights that best
-    reproduce its cost changes on small reassignments, since its network has no direct weights there; the oracle: its
-    own weights).  The map is centred on the true objective; distance = angle to it (degrees, measured on small
-    reassignments); axes = the learner's starting direction and the main other direction of its path.  Colour = regret
-    of the plans each objective on the true terms would recommend."""
-    from .assign import cost, solve
-    W = res["world"]; TC = W.true_cols; S = W.base.S[np.ix_(TC, TC)]; ev, V = np.linalg.eigh(S)
-    Sh = V @ np.diag(np.sqrt(np.clip(ev, 1e-12, None))) @ V.T; Shi = V @ np.diag(1 / np.sqrt(np.clip(ev, 1e-12, None))) @ V.T
-    zL = res["path_learner"] @ Sh; zO = res["path_oracle"] @ Sh; c = Sh @ W.w[TC]; c /= np.linalg.norm(c)
-    u1 = zL[0] - (zL[0] @ c) * c
-    u1 = u1 / np.linalg.norm(u1) if np.linalg.norm(u1) > 1e-9 else np.eye(len(c))[np.argmin(np.abs(c))]
-    Rm = zL / np.linalg.norm(zL, axis=1, keepdims=True); Rm = Rm - np.outer(Rm @ c, c) - np.outer(Rm @ u1, u1)
-    u2 = np.linalg.svd(Rm, full_matrices=False)[2][0] if np.linalg.norm(Rm) > 1e-9 else np.random.default_rng(1).standard_normal(len(c))
-    u2 = u2 - (u2 @ c) * c - (u2 @ u1) * u1; u2 /= np.linalg.norm(u2)
-    PL = [_chart(z, c, u1, u2) for z in zL]; PO = [_chart(z, c, u1, u2) for z in zO]
-    Rr = min(max([np.hypot(*p) for p, _ in PL + PO] + [10.0]) * 1.25, 180.0)
-    months = [W.train[i] for i in np.unique(np.linspace(0, len(W.train) - 1, min(30, len(W.train))).astype(int))]
-    n = W.cfg.n_cargo; g = np.linspace(-Rr, Rr, grid); Z = np.full((grid, grid), np.nan)
-    for i, y in enumerate(g):
-        for j, x in enumerate(g):
-            rho = np.hypot(x, y)
-            if rho > 180:
-                continue
-            a = np.radians(rho); d = np.array([x, y]) / rho if rho > 0 else np.zeros(2)
-            th = Shi @ (np.cos(a) * c + np.sin(a) * (d[0] * u1 + d[1] * u2))
-            Z[i, j] = np.mean([cost(mo.C, solve(mo.X[..., TC] @ th, mo.allowed)) - cost(mo.C, mo.astar) for mo in months]) / n
-    f = go.Figure()
-    f.add_contour(x=g, y=g, z=Z, colorscale="Blues", reversescale=True, contours=dict(showlabels=True), colorbar=dict(title="regret"),
-                  hoverinfo="skip")
-    for P_, col, dash, nm, extra in ((PO, RED, "dash", "oracle baseline", None), (PL, ORANGE, None, "learner (effective objective)", res["fit_learner"])):
-        A = np.array([p for p, _ in P_]); off = [o for _, o in P_]
-        cd = np.column_stack([np.arange(len(A)), off] + ([extra] if extra is not None else [np.ones(len(A))]))
-        f.add_scatter(x=A[:, 0], y=A[:, 1], mode="lines", line=dict(color=col, width=2.5, dash=dash), customdata=cd, name=nm,
-                      hovertemplate="after month %{customdata[0]}<br>off-map angle %{customdata[1]:.1f}°<br>share of the model "
-                                    "written in true terms %{customdata[2]:.2f}<extra></extra>")
-    A0 = PL[0][0]
-    f.add_scatter(x=[A0[0]], y=[A0[1]], mode="markers", marker=dict(size=12, color=ORANGE, line=dict(width=2, color="white")), name="start (both)")
-    f.add_annotation(x=A0[0], y=A0[1], text="start", showarrow=True, arrowhead=0, ax=25, ay=-30, bgcolor="white", bordercolor=ORANGE,
-                     font=dict(color=ORANGE, size=13))
-    f.add_scatter(x=[0], y=[0], mode="markers", marker=dict(symbol="x", size=13, color=GREY), name="true objective")
-    f.update_layout(title="Objective space: path of each model's objective (written in the 10 true terms)",
-                    xaxis_title="degrees toward the starting objective", yaxis_title="degrees along the path's other main direction",
-                    yaxis_scaleanchor="x", height=560, **LAYOUT)
-    return f
-
-
-KNOWN = "regret from known terms (per cargo)"
-UNKNOWN = "regret from missing terms + G* (per cargo)"
-
-
-def _diagonals(f, lo, hi):
-    g = np.linspace(lo, hi, 60)
-    f.add_contour(x=g, y=g, z=np.add.outer(g, g), colorscale="Greys", showscale=False, opacity=0.35,
-                  contours=dict(showlabels=True, coloring="lines"), hoverinfo="skip", name="total regret")
-
-
-def _start(f, x, y, col):
-    f.add_scatter(x=[x], y=[y], mode="markers", marker=dict(size=12, color=col, line=dict(width=2, color="white")), showlegend=False)
-    f.add_annotation(x=x, y=y, text="start", showarrow=True, arrowhead=0, ax=25, ay=-30, bgcolor="white",
-                     bordercolor=col, font=dict(color=col, size=13))
-
-
-def decision_path(res, w):
-    """Path of the recommended plans (average of the last w months): regret split into the part from the terms the
-    initial model knows and the rest.  Grey diagonals: equal total regret (label = total)."""
-    f = go.Figure(); xs, ys = [], []
-    for ev, col, nm in ((res["evals"], ORANGE, "learner"), (res["oracle"], RED, "oracle baseline")):
-        x = smooth([e["regret_known"] for e in ev], w); y = smooth([e["regret_unknown"] for e in ev], w); xs += list(x); ys += list(y)
-        f.add_scatter(x=x, y=y, mode="lines", line=dict(color=col, width=2.5, dash=None if nm == "learner" else "dash"),
-                      customdata=np.arange(len(x)), hovertemplate="month %{customdata}<extra></extra>",
-                      name="%s (average of last %d months)" % (nm, w))
-    lo = min(min(xs), min(ys), 0) - 0.03; hi = max(max(xs), max(ys)) + 0.03; _diagonals(f, lo, hi)
-    _start(f, xs[0], ys[0], ORANGE)
-    f.add_scatter(x=[0], y=[0], mode="markers", marker=dict(symbol="circle-open", size=14, color=GREEN), name="true optimum")
-    f.update_layout(title="Decision space: path of the recommended plans", xaxis_title=KNOWN, yaxis_title=UNKNOWN,
-                    yaxis_scaleanchor="x", height=560, **LAYOUT)
-    return f
-
-
-def month_view(rec, n, eps):
-    """One month: the region of candidates within eps (shaded), the shown plans, the plan the human started from, the
-    recorded correction path to the human's response, and the true optimum."""
-    from scipy.spatial import ConvexHull, QhullError
-    d = rec["detail"]; C = np.array(d["cands"])[:, :2] / n; P = np.array(d["path"]) / n; k = d["k"]; Sh = C[d["shown"]]
-    f = go.Figure()
-    lo = min(C.min(), P.min(), 0) - 0.02; hi = max(C.max(), P.max()) + 0.02; _diagonals(f, lo, hi)
-    txt = "%d candidate%s, ε = %g%s" % (len(C), "" if len(C) == 1 else "s", eps, " (K_max reached)" if rec["capped"] else "")
-    hull = None
-    if len(C) >= 3:
-        try:
-            hull = C[ConvexHull(C).vertices]
-        except QhullError:
-            hull = None
-    if hull is not None:
-        f.add_scatter(x=np.r_[hull[:, 0], hull[0, 0]], y=np.r_[hull[:, 1], hull[0, 1]], fill="toself", mode="lines",
-                      line=dict(color=BLUE, width=1), fillcolor="rgba(42,111,219,0.15)", hoverinfo="skip",
-                      name="region of candidates within ε")
-        top = hull[np.argmax(hull[:, 0])]
-    else:
-        f.add_scatter(x=C[:, 0], y=C[:, 1], mode="markers", marker=dict(size=7, color=BLUE, opacity=0.4), name="candidates within ε")
-        top = C[np.argmax(C[:, 0])]
-    f.add_annotation(x=top[0], y=top[1], text=txt, showarrow=False, xanchor="left", xshift=8, font=dict(color=BLUE, size=13))
-    f.add_scatter(x=Sh[:, 0], y=Sh[:, 1], mode="markers", marker=dict(symbol="circle-open", size=13, color=BLUE, line=dict(width=2)),
-                  name="shown to the human (%d)" % len(Sh))
-    f.add_scatter(x=P[:, 0], y=P[:, 1], mode="lines+markers", line=dict(color=ORANGE, width=2), marker=dict(size=8),
-                  name="recorded correction (biggest group first)")
-    f.add_scatter(x=[P[0, 0]], y=[P[0, 1]], mode="markers", marker=dict(symbol="square", size=13, color=BLUE), name="plan the human starts from")
-    f.add_scatter(x=[P[k, 0]], y=[P[k, 1]], mode="markers", marker=dict(symbol="diamond", size=14, color=RED),
-                  name="human's response (best under the proposal-tilted objective)")
-    f.add_scatter(x=[0], y=[0], mode="markers", marker=dict(symbol="circle-open", size=14, color=GREEN), name="true optimum x*")
-    f.update_layout(title="Month %d: the human reassigned %d of the %d cargoes that differ from x*%s" % (
-                        rec["t"], rec["changed"], rec["changes_needed"], " (reached x*)" if rec["reached_xstar"] else ""),
-                    xaxis_title=KNOWN, yaxis_title=UNKNOWN, yaxis_scaleanchor="x", height=520, **LAYOUT)
-    return f
-
-
-def sweep_curves(cv, color_by, fixed, w, metric="regret", raw=False):
-    """Mean over replicates of the smoothed curve for each value of `color_by` (± se), with the oracle baseline."""
-    d = cv.copy()
-    for k, v in fixed.items():
-        d = d[d[k] == v]
-    f = go.Figure(); pal = ["#2a6fdb", "#2e9e6a", "#e07a1f", "#7b4fd6", "#1f9fb5", "#a3672b", "#6b7280", "#d4a017"]
-    sym = LABELS[color_by][0] if color_by in LABELS else color_by
-    meas = {"month", "regret", "match", "oracle_regret", "oracle_match", "regret_known", "regret_unknown", "optimism"}
-    keys = [c for c in d.columns if c not in meas]
-    for i, (val, g) in enumerate(d.groupby(color_by)):
-        g = g.sort_values("month").copy(); col = pal[i % len(pal)]
-        for src, dash, nm in ((metric, None, "%s = %s" % (sym, val)), ("oracle_" + metric, "dash", "oracle, %s = %s" % (sym, val))):
-            g["sm"] = g.groupby(keys)[src].transform(lambda y: smooth(y, w))
-            m = g.groupby("month"); mu = m.sm.mean(); se = m.sm.std() / np.sqrt(m.sm.count())
-            if dash is None:
-                f.add_scatter(x=np.r_[mu.index, mu.index[::-1]], y=np.r_[mu + se, (mu - se)[::-1]], fill="toself", line=dict(width=0),
-                              fillcolor=col, opacity=0.15, hoverinfo="skip", showlegend=False)
-            f.add_scatter(x=mu.index, y=mu.values, mode="lines", line=dict(color=col, width=3 if dash is None else 1.8, dash=dash), name=nm)
-            if raw and dash is None:
-                f.add_scatter(x=mu.index, y=m[src].mean().values, mode="lines", line=dict(color=col, width=1), opacity=0.4,
-                              name="%s, each month" % nm)
-    ttl = "Regret of the recommended plan" if metric == "regret" else "Match with x*"
-    f.update_layout(title="%s, average of the last %d months (mean ± se over replicates; dashed = oracle baseline)" % (ttl, w),
-                    xaxis_title="month", yaxis_title="regret per cargo" if metric == "regret" else "match with x*", **LAYOUT)
+def decomposition(rc, loops, setup):
+    """At the end of learning (each run's final weights, its plans on the held-out months): human regret against the best
+    plan overall = optimization error O (best available plan vs the best plan overall) + execution error E (the human's
+    plan vs the best available plan), and the cost of a mistake L = E / (1 - P)."""
+    hs = list(rc.r_values if setup == "A" else rc.k_values); xl = "revision radius r" if setup == "A" else "plans shown k"; x = [str(h) for h in hs]
+    f = make_subplots(rows=1, cols=4, horizontal_spacing=0.06,
+                      subplot_titles=("Optimization error O", "Execution error E", "Total O + E: human plan vs best overall", "Cost of a mistake L = E / (1 − P)"))
+    for e in [b for b in rc.budgets if b != NO_RESPONSE]:
+        av = lambda key: np.array([np.mean([o["after"][key] for o in loops if o["setup"] == setup and o["h"] == h and o["B"] == e and o.get("after")] or [np.nan]) for h in hs])
+        O, E, P = av("O"), av("E"), av("best"); L = np.where(1 - P > 1e-9, E / np.maximum(1 - P, 1e-9), np.nan)
+        for c_, y in ((1, O), (2, E), (3, O + E), (4, L)):
+            f.add_scatter(x=x, y=y, mode="lines+markers", line=b_line(rc, e), marker=dict(size=7), name=b_name(e), legendgroup=str(e),
+                          showlegend=c_ == 1, row=1, col=c_, hovertemplate="%{y:.3f}")
+    f.update_xaxes(title_text=xl, type="category"); f.update_yaxes(title_text="per cargo", rangemode="tozero", col=1)
     f.update_yaxes(rangemode="tozero")
+    _top_legend(f, 470, 110)
     return f
 
 
-DECOMP = [("share_unchanged", "#2a78d6", "Human keeps a non-optimal proposal unchanged (alone)"),
-          ("share_distorted", "#eb6834", "Human improves the proposal, but the proposal steers which improvement (alone)"),
-          ("share_interaction", "#6250d6", "Both together: unchanged months withhold the feedback that would undo the distortion")]
+def interface_comparison(rc, loops):
+    """Held-out regret after learning against human capacity B, one line per freedom level, for each setup."""
+    real = [b for b in rc.budgets if b not in (RANDOM, NO_RESPONSE)]; xs = ["∞" if np.isinf(b) else "%g" % b for b in real]
+    f = make_subplots(rows=1, cols=2, horizontal_spacing=0.1, shared_yaxes=True,
+                      subplot_titles=("Setup A: one line per radius r", "Setup B: one line per menu size k"))
+    for c_, s, hs, sym in ((1, "A", rc.r_values, "r"), (2, "B", rc.k_values, "k")):
+        for i, h in enumerate(hs):
+            y = [np.mean([o["final"] for o in loops if o["setup"] == s and o["h"] == h and o["B"] == b] or [np.nan]) for b in real]
+            f.add_scatter(x=xs, y=y, mode="lines+markers", line=dict(color=PAL[i % 8], width=2.5), marker=dict(size=7), name="%s = %s" % (sym, h),
+                          legend="legend" if c_ == 1 else "legend2", row=1, col=c_, hovertemplate="%{y:.3f}")
+    O = _oracle(loops)
+    if O:
+        for c_ in (1, 2):
+            f.add_scatter(x=xs, y=[np.mean([o["final"] for o in O])] * len(xs), mode="lines", line=ORC_LINE, name="r = ∞ reference",
+                          legend="legend" if c_ == 1 else "legend2", row=1, col=c_, hovertemplate="%{y:.3f}")
+    f.update_xaxes(title_text="human capacity B", type="category"); f.update_yaxes(title_text="regret per cargo", rangemode="tozero", col=1)
+    under = lambda ax: dict(orientation="h", x=ax.domain[0], xanchor="left", y=-0.2, yanchor="top")
+    f.update_layout(height=470, **{**LAYOUT, "margin": dict(l=60, r=20, t=60, b=100), "legend": under(f.layout.xaxis)}, legend2=under(f.layout.xaxis2))
+    return f
 
 
-def decomposition_bar(d, lam):
-    """One stacked horizontal bar: shares of the learner's excess regret (over lambda = 0) due to each kind of human
-    response, from the attribution experiment."""
+def convergence(rc, loops, B, r, k):
+    """Two panels over the training months: distance (angle) from the learned to the true weights, and held-out regret."""
+    f = make_subplots(rows=1, cols=2, horizontal_spacing=0.1,
+                      subplot_titles=("Distance from the learned to the true weights", "Held-out regret"))
+    for s, h, col in (("A", r, PAL[0]), ("B", k, PAL[1])):
+        for e, dash, width in ((B, None, 2.5), (CTRL, "dash", 1.5)):
+            if e == CTRL and (B == CTRL or CTRL not in rc.budgets):
+                continue
+            runs = [o for o in loops if o["setup"] == s and o["h"] == h and o["B"] == e]
+            if not runs:
+                continue
+            nm = "Setup %s, %s = %s%s" % (s, "r" if s == "A" else "k", h, ", random response" if e == CTRL and B != CTRL else "")
+            for c_, key in ((1, "dist"), (2, "held")):
+                y = np.mean([o[key] for o in runs], axis=0)
+                f.add_scatter(x=np.arange(len(y)), y=y, mode="lines", line=dict(color=col, dash=dash, width=width), name=nm,
+                              legend="legend" if c_ == 1 else "legend2", row=1, col=c_, hovertemplate="%{y:.3f}")
+    O = _oracle(loops)
+    for c_, key in ((1, "dist"), (2, "held")):
+        if O:
+            y = np.mean([o[key] for o in O], axis=0)
+            f.add_scatter(x=np.arange(len(y)), y=y, mode="lines", line=ORC_LINE, name=ORC, legend="legend" if c_ == 1 else "legend2",
+                          row=1, col=c_, hovertemplate="%{y:.3f}")
+    f.update_xaxes(title_text="training month T")
+    f.update_yaxes(title_text="degrees (0 = same tradeoffs)", rangemode="tozero", row=1, col=1)
+    f.update_yaxes(title_text="regret per cargo", rangemode="tozero", row=1, col=2)
+    under = lambda ax: dict(orientation="v", x=ax.domain[0], xanchor="left", y=-0.2, yanchor="top")
+    f.update_layout(height=560, **{**LAYOUT, "margin": dict(l=60, r=20, t=60, b=150), "legend": under(f.layout.xaxis)}, legend2=under(f.layout.xaxis2))
+    return f
+
+
+def learning_speed(rc, loops, B):
+    """Held-out regret over the months, one line per complexity, for each setup."""
+    f = make_subplots(rows=1, cols=2, horizontal_spacing=0.1, subplot_titles=("Setup A: one line per radius r", "Setup B: one line per menu size k"))
+    for c_, s, hs, sym in ((1, "A", rc.r_values, "r"), (2, "B", rc.k_values, "k")):
+        for i, h in enumerate(hs):
+            runs = [o["held"] for o in loops if o["setup"] == s and o["h"] == h and o["B"] == B]
+            if runs:
+                y = np.mean(runs, axis=0)
+                f.add_scatter(x=np.arange(len(y)), y=y, mode="lines", line=dict(color=PAL[i % 8], width=2), name="%s = %s" % (sym, h),
+                              legend="legend" if c_ == 1 else "legend2", row=1, col=c_, hovertemplate="%{y:.3f}")
+    O = _oracle(loops)
+    if O:
+        y = np.mean([o["held"] for o in O], axis=0)
+        for c_ in (1, 2):
+            f.add_scatter(x=np.arange(len(y)), y=y, mode="lines", line=ORC_LINE, name="r = ∞ reference (true best plan, no error)",
+                          legend="legend" if c_ == 1 else "legend2", row=1, col=c_, hovertemplate="%{y:.3f}")
+    f.update_xaxes(title_text="training month T"); f.update_yaxes(title_text="regret per cargo", rangemode="tozero")
+    under = lambda ax: dict(orientation="h", x=ax.domain[0], xanchor="left", y=-0.2, yanchor="top")
+    f.update_layout(height=460, **{**LAYOUT, "margin": dict(l=60, r=20, t=60, b=90), "legend": under(f.layout.xaxis)}, legend2=under(f.layout.xaxis2))
+    return f
+
+
+def _smooth(y, w=5):
+    """Trailing mean over the last w months, skipping missing months."""
+    y = np.asarray(y, float); out = np.full(len(y), np.nan)
+    for t in range(len(y)):
+        z = y[max(0, t - w + 1):t + 1]; z = z[np.isfinite(z)]
+        out[t] = z.mean() if len(z) else np.nan
+    return out
+
+
+def feedback_value(rc, loops, B, r, k):
+    """Two panels over the training months: menu coverage V_t / R_t (how much of the machine's regret its set of plans
+    could fix) and the preference-specific gain G_T = regret with random choice - regret with the human."""
+    f = make_subplots(rows=1, cols=2, horizontal_spacing=0.1,
+                      subplot_titles=("Coverage: share of the machine's regret its plans could fix", "Gain from the human's answers over random response"))
+    for s, h, col in (("A", r, PAL[0]), ("B", k, PAL[1])):
+        sym = "r" if s == "A" else "k"
+        runs = [o for o in loops if o["setup"] == s and o["h"] == h and o["B"] == B]
+        ctrl = [o for o in loops if o["setup"] == s and o["h"] == h and o["B"] == CTRL]
+        if not runs:
+            continue
+        cov = np.nanmean([np.where(o["R"] > 1e-9, o["V"] / np.maximum(o["R"], 1e-9), np.nan) for o in runs], axis=0)
+        f.add_scatter(x=np.arange(1, len(cov) + 1), y=_smooth(cov), mode="lines", line=dict(color=col, width=2.5), name="Setup %s, %s = %s" % (s, sym, h),
+                      legend="legend", row=1, col=1, hovertemplate="%{y:.2f}")
+        if ctrl and B != CTRL:
+            byrep = {o["rep"]: o["held"] for o in ctrl}
+            G = np.mean([byrep[o["rep"]] - o["held"] for o in runs if o["rep"] in byrep], axis=0)
+            f.add_scatter(x=np.arange(len(G)), y=G, mode="lines", line=dict(color=col, width=2.5), name="Setup %s, %s = %s" % (s, sym, h),
+                          legend="legend2", row=1, col=2, hovertemplate="%{y:.3f}")
+    O = _oracle(loops)
+    if O:
+        cov = np.nanmean([np.where(o["R"] > 1e-9, o["V"] / np.maximum(o["R"], 1e-9), np.nan) for o in O], axis=0)
+        f.add_scatter(x=np.arange(1, len(cov) + 1), y=_smooth(cov), mode="lines", line=ORC_LINE, name="r = ∞ reference (always 1)",
+                      legend="legend", row=1, col=1, hovertemplate="%{y:.2f}")
+    f.add_hline(y=0, line=dict(color=GREY, width=1), row=1, col=2)
+    f.update_xaxes(title_text="training month T")
+    f.update_yaxes(title_text="V_t / R_t (5-month mean)", range=[0, 1.05], row=1, col=1)
+    f.update_yaxes(title_text="regret per cargo: random − human", row=1, col=2)
+    under = lambda ax: dict(orientation="v", x=ax.domain[0], xanchor="left", y=-0.2, yanchor="top")
+    f.update_layout(height=520, **{**LAYOUT, "margin": dict(l=60, r=20, t=60, b=120), "legend": under(f.layout.xaxis)}, legend2=under(f.layout.xaxis2))
+    return f
+
+
+def objective_map(m, names):
+    """Contour of regret over weight directions, with each run's path."""
     f = go.Figure()
-    for key, col, name in DECOMP:
-        v = 100 * d[key]
-        f.add_bar(x=[v], y=[""], orientation="h", name=name, marker=dict(color=col, line=dict(color="#fcfcfb", width=2)),
-                  text=["%.0f%%" % v], textposition="inside", insidetextanchor="middle",
-                  textfont=dict(color="#ffffff" if col == "#6250d6" else "#0b0b0b", size=14),
-                  hovertemplate=name + ": %{x:.0f}% of the excess regret<extra></extra>")
-    f.update_traces(textangle=0, constraintext="none", cliponaxis=False)
-    f.update_layout(barmode="stack", height=300, template="plotly_white", showlegend=True, bargap=0.25,
-                    title=dict(text="What drives the learning error at λ = %g (share of the excess regret %.3f per cargo over λ = 0)" % (lam, d["excess"]), font=dict(size=15)),
-                    xaxis=dict(range=[0, 100], ticksuffix="%", showgrid=False), yaxis=dict(showticklabels=False),
-                    margin=dict(l=10, r=10, t=40, b=10), legend=dict(orientation="v", traceorder="normal", y=-0.3, yanchor="top", x=0, font=dict(size=12)))
-    return f
-
-
-FREQ = [("already x*", "#6b7280", "Proposal was already the true optimum"),
-        ("unchanged", "#2a78d6", "Human keeps a non-optimal proposal unchanged"),
-        ("steered", "#eb6834", "Human improves the proposal, but the proposal steers which improvement"),
-        ("to x*", "#1baf7a", "Human corrects the proposal all the way to x*")]
-
-
-def response_counts(months):
-    """Share of months with each kind of human response."""
-    import pandas as pd
-    M = pd.DataFrame(months); opt = M.changes_needed == 0; same = M.changed == 0
-    star = M.reached_xstar.astype(bool) & ~opt
-    return {"already x*": opt.mean(), "unchanged": (same & ~opt).mean(), "to x*": (star & ~same).mean(),
-            "steered": (~opt & ~same & ~star).mean()}
-
-
-def frequency_bar(shares, title):
-    f = go.Figure()
-    for key, col, name in FREQ:
-        v = 100 * shares[key]
-        f.add_bar(x=[v], y=[""], orientation="h", name=name, marker=dict(color=col, line=dict(color="#fcfcfb", width=2)),
-                  text=["%.0f%%" % v if v >= 3 else ""], textposition="inside", insidetextanchor="middle",
-                  textfont=dict(color="#0b0b0b", size=14), hovertemplate=name + ": %{x:.0f}% of months<extra></extra>")
-    f.update_traces(textangle=0, constraintext="none")
-    f.update_layout(barmode="stack", height=300, template="plotly_white", bargap=0.25, title=dict(text=title, font=dict(size=15)),
-                    xaxis=dict(range=[0, 100], ticksuffix="%", showgrid=False), yaxis=dict(showticklabels=False),
-                    margin=dict(l=10, r=10, t=40, b=10), legend=dict(orientation="v", traceorder="normal", y=-0.3, yanchor="top", x=0, font=dict(size=12)))
-    return f
-
-
-def hidden_cost_view(net):
-    """Truth vs network on the part of the cost the learner's linear terms cannot express, one value per cargo-ship
-    pair (each cargo's average removed): distributions (left) and pair by pair (right)."""
-    from plotly.subplots import make_subplots
-    t, m = net["truth"], net["net"]; lo, hi = np.percentile(np.r_[t, m], [0.5, 99.5]); bins = np.linspace(lo, hi, 40)
-    f = make_subplots(rows=1, cols=2, column_widths=[0.55, 0.45], horizontal_spacing=0.1,
-                      subplot_titles=("Distribution over cargo–ship pairs", "Pair by pair (dots on the line = learned exactly)"))
-    for v, col, nm, dash in ((t, GREEN, "truth", None), (m, BLUE, "learned by the network", "dash")):
-        h, e = np.histogram(np.clip(v, lo, hi), bins=bins, density=True)
-        f.add_scatter(x=(e[:-1] + e[1:]) / 2, y=h, mode="lines", line=dict(color=col, width=2.5, dash=dash, shape="spline"),
-                      name=nm, row=1, col=1)
-    sub = np.random.default_rng(0).permutation(len(t))[:1500]
-    f.add_scatter(x=t[sub], y=m[sub], mode="markers", marker=dict(size=4, color=BLUE, opacity=0.35), showlegend=False,
-                  hovertemplate="truth %{x:.2f}<br>learned %{y:.2f}<extra></extra>", row=1, col=2)
-    f.add_scatter(x=[lo, hi], y=[lo, hi], mode="lines", line=dict(color=GREY, dash="dot"), showlegend=False, hoverinfo="skip", row=1, col=2)
-    f.update_xaxes(title_text="hidden cost of a pair", row=1, col=1); f.update_yaxes(title_text="share of pairs", row=1, col=1)
-    f.update_xaxes(title_text="true hidden cost", row=1, col=2); f.update_yaxes(title_text="learned", row=1, col=2)
-    f.update_layout(title="Hidden part of the cost: truth vs what the network learned (end of run)", height=450,
-                    **{**LAYOUT, "margin": dict(l=60, r=20, t=90, b=50)})
-    return f
-
-
-def feature_view(feat):
-    """One learned feature against the true nonlinear feature it most resembles, per cargo-ship pair."""
-    sub = np.random.default_rng(0).permutation(len(feat["h"]))[:1500]
-    f = go.Figure()
-    f.add_scatter(x=feat["g"][sub], y=feat["h"][sub], mode="markers", marker=dict(size=4, color=BLUE, opacity=0.35),
-                  hovertemplate="true %{x:.2f}<br>learned %{y:.2f}<extra></extra>", name="cargo–ship pair")
-    f.update_layout(title="Learned feature %d vs '%s' (correlation %.2f)" % (feat["k"], feat["resembles"].replace("_", " "), feat["corr"]),
-                    xaxis_title="true feature: %s (relative to the cargo's average ship)" % feat["resembles"].replace("_", " "),
-                    yaxis_title="learned feature %d" % feat["k"],
-                    height=380, showlegend=False, **LAYOUT)
+    f.add_contour(x=m["g"], y=m["g"], z=m["z"], colorscale="Blues", contours=dict(showlabels=True, labelfont=dict(size=11, color="white")),
+                  colorbar=dict(title=dict(text="regret<br>per cargo", side="top")), hovertemplate="regret %{z:.3f}<extra></extra>")
+    for i, (P, nm) in enumerate(zip(m["paths"], names)):
+        col = "#111111" if nm.startswith("r = ∞") else PAL[i]
+        f.add_scatter(x=P[:, 0], y=P[:, 1], mode="lines", line=dict(color=col, width=3, dash="dashdot" if nm.startswith("r = ∞") else None), name=nm, customdata=np.arange(len(P)),
+                      hovertemplate="after month %{customdata}<extra>" + nm + "</extra>")
+        f.add_scatter(x=[P[-1, 0]], y=[P[-1, 1]], mode="markers", marker=dict(size=10, color=col, line=dict(width=2, color="white")), showlegend=False, hoverinfo="skip")
+    s0 = m["paths"][0][0]
+    f.add_scatter(x=[s0[0]], y=[s0[1]], mode="markers+text", marker=dict(size=13, color="white", line=dict(width=2.5, color="black")),
+                  text=["start"], textposition="top right", name="start (shared)", hoverinfo="skip")
+    f.add_scatter(x=[0], y=[0], mode="markers+text", marker=dict(symbol="x", size=14, color="black"), text=["true weights"],
+                  textposition="bottom right", name="true weights", hoverinfo="skip")
+    f.update_layout(height=620, xaxis_title="degrees toward the starting weights", yaxis_title="degrees along the paths' other main direction",
+                    yaxis_scaleanchor="x", **{**LAYOUT, "hovermode": "closest"})
     return f
